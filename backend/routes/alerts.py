@@ -4,6 +4,7 @@ import uuid
 router=APIRouter()
 from typing import Optional
 
+@router.get("")
 @router.get("/")
 def alerts(district: Optional[str] = None, authorization:str=Header(None),status:str=""):
  u = current_user(authorization)

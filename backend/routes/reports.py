@@ -230,3 +230,36 @@ def download_state_pdf(authorization: str = Header(None)):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="LANDNEXUS_State_Report_TamilNadu.pdf"'}
     )
+
+
+@router.get("/parcel/{parcel_id}/pdf")
+def download_parcel_report_pdf(parcel_id: str, authorization: str = Header(None)):
+    """Download a comprehensive PDF dossier report for a single parcel."""
+    u = current_user(authorization)
+    if not u:
+        raise HTTPException(401, "Authentication required")
+    c = conn()
+    p = None
+    if str(parcel_id).isdigit():
+        p = c.execute("SELECT * FROM parcels WHERE id=?", (int(parcel_id),)).fetchone()
+    if not p:
+        p = c.execute("SELECT * FROM parcels WHERE record_id=?", (str(parcel_id),)).fetchone()
+    if not p:
+        p = c.execute("SELECT * FROM parcels WHERE id=?", (str(parcel_id),)).fetchone()
+    if not p:
+        c.close()
+        raise HTTPException(404, "Parcel not found")
+    pd = dict(p)
+    check_resource_district(u, pd["district"], "Parcel Report")
+    try:
+        from backend.services.pdf_report import generate_parcel_report
+        pdf_bytes = generate_parcel_report(c, pd["id"], user_info=u)
+    except Exception as e:
+        c.close()
+        raise HTTPException(500, f"Error generating parcel PDF report: {str(e)}")
+    c.close()
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="LANDNEXUS_Parcel_{pd["id"]}_{pd.get("record_id", "dossier")}.pdf"'}
+    )

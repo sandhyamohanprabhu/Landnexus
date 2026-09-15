@@ -6,6 +6,7 @@ from backend.core import current_user, conn, UPLOADS, enforce_district_scope, ch
 
 router = APIRouter()
 
+@router.get("")
 @router.get("/")
 def docs(authorization: str = Header(None), parcel_id: int = None, project_id: str = None, district: str = None):
     u = current_user(authorization)

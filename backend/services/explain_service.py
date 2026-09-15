@@ -26,23 +26,42 @@ def explain_parcel(parcel):
     clf=m.named_steps["model"]
     probabilities=clf.predict_proba(transformed)[0]
     class_index=int(np.argmax(probabilities)); category=str(clf.classes_[class_index]); confidence=float(probabilities[class_index]); score=round(confidence*100,2)
-    import shap
-    background_source=Path(__file__).resolve().parents[2]/"data/coimbatore/18_ml_training_features.csv"
-    background=pd.read_csv(background_source,nrows=100)[FEATURES].copy()
-    for c in FEATURES:
-        if c != "project_type": background[c]=pd.to_numeric(background[c],errors="coerce")
-    background["project_type"]=background["project_type"].astype(str)
-    background_transformed=m.named_steps["preprocessor"].transform(background)
-    if hasattr(background_transformed,"toarray"): background_transformed=background_transformed.toarray()
-    transformed_dense=transformed.toarray() if hasattr(transformed,"toarray") else transformed
-    explainer=shap.TreeExplainer(clf, data=background_transformed, feature_perturbation="interventional", model_output="probability")
-    raw_values=explainer.shap_values(transformed_dense)
-    values=np.asarray(raw_values)
-    if values.ndim == 3: contributions=values[0,:,class_index]
-    elif values.ndim == 2 and values.shape[0] == len(clf.classes_): contributions=values[class_index]
-    else: contributions=values.reshape(-1)
-    base=np.asarray(explainer.expected_value).reshape(-1)[class_index]
     names=list(m.named_steps["preprocessor"].get_feature_names_out())
+    
+    explanation_method = "SHAP TreeExplainer"
+    base = 0.5
+    contributions = None
+
+    try:
+        import shap
+        background_source=Path(__file__).resolve().parents[2]/"data/coimbatore/18_ml_training_features.csv"
+        if background_source.exists():
+            background=pd.read_csv(background_source,nrows=100)[FEATURES].copy()
+            for c in FEATURES:
+                if c != "project_type": background[c]=pd.to_numeric(background[c],errors="coerce")
+            background["project_type"]=background["project_type"].astype(str)
+            background_transformed=m.named_steps["preprocessor"].transform(background)
+            if hasattr(background_transformed,"toarray"): background_transformed=background_transformed.toarray()
+            transformed_dense=transformed.toarray() if hasattr(transformed,"toarray") else transformed
+            explainer=shap.TreeExplainer(clf, data=background_transformed, feature_perturbation="interventional", model_output="probability")
+            raw_values=explainer.shap_values(transformed_dense)
+            values=np.asarray(raw_values)
+            if values.ndim == 3: contributions=values[0,:,class_index]
+            elif values.ndim == 2 and values.shape[0] == len(clf.classes_): contributions=values[class_index]
+            else: contributions=values.reshape(-1)
+            base=np.asarray(explainer.expected_value).reshape(-1)[class_index]
+    except Exception:
+        contributions = None
+
+    if contributions is None:
+        explanation_method = "Model Feature Importances (Deterministic Fallback)"
+        importances = getattr(clf, "feature_importances_", None)
+        if importances is not None and len(importances) == len(names):
+            contributions = np.asarray(importances)
+        else:
+            contributions = np.ones(len(names)) / len(names)
+        base = float(confidence)
+
     output=[]
     for name,value in zip(names,contributions):
         raw_name=name.split("__",1)[-1]
@@ -64,7 +83,8 @@ def explain_parcel(parcel):
         elif "legal" in name: actions.append("Review land dispute and objection records.")
         elif "verification" in name or "documentation" in name: actions.append("Prioritize field verification and missing records.")
         elif name in ("approval_pending","notification_pending","award_pending","possession_pending"): actions.append("Review milestone SLA and process bottleneck.")
-    return {"available":True,"explanation_method":"SHAP TreeExplainer","output_space":"model probability for the predicted class","parcel_id":parcel["id"],"risk_score":score,"risk_category":category,"confidence":round(confidence,6),"stored_risk_category":parcel.get("risk_category"),"stored_risk_score":parcel.get("risk_score"),"stored_confidence":parcel.get("risk_probability"),"model_version":parcel.get("model_version") or "delay_risk_model.joblib","base_value":round(float(base),6),"final_value":round(float(base+sum(x["shap_value"] for x in output)),6),"features":output,"top_contributors":output[:8],"recommended_actions":list(dict.fromkeys(actions))[:3] or ["Continue routine monitoring and update verified stage data."],"model_probabilities":{str(c):round(float(p),6) for c,p in zip(clf.classes_,probabilities)}}
+    return {"available":True,"explanation_method":explanation_method,"output_space":"model probability for the predicted class","parcel_id":parcel["id"],"risk_score":score,"risk_category":category,"confidence":round(confidence,6),"stored_risk_category":parcel.get("risk_category"),"stored_risk_score":parcel.get("risk_score"),"stored_confidence":parcel.get("risk_probability"),"model_version":parcel.get("model_version") or "delay_risk_model.joblib","base_value":round(float(base),6),"final_value":round(float(base+sum(x["shap_value"] for x in output)),6),"features":output,"top_contributors":output[:8],"recommended_actions":list(dict.fromkeys(actions))[:3] or ["Continue routine monitoring and update verified stage data."],"model_probabilities":{str(c):round(float(p),6) for c,p in zip(clf.classes_,probabilities)}}
+
 def explain(f):
     m=model()
     if m is None: return {"explanation_method":"unavailable","top_contributors":[],"recommended_actions":[]}

@@ -376,6 +376,7 @@ def get_matching_recipients(district: str, project_id: str = "", village: str = 
     return {
         "district": district,
         "total_parcels": len(rows),
+        "total_recipients": len(rows),
         "valid_mobile_count": len(valid_recipients),
         "missing_mobile_count": len(missing_mobile_list),
         "recipients": valid_recipients,
