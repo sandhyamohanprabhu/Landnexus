@@ -218,9 +218,12 @@ aside,
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .metric {
@@ -228,24 +231,147 @@ aside,
   border: 1px solid #dde5e8;
   border-radius: 12px;
   padding: 15px;
+  min-width: 0;
 }
 
 .metric span {
   display: block;
   color: #667b85;
   font-size: 11px;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .metric b {
   display: block;
   font-size: 26px;
   margin-top: 7px;
+  overflow-wrap: break-word;
 }
 
 .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 18px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.grid2 > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 1100px) {
+  .grid2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── RISK INTELLIGENCE RESPONSIVE LAYOUT ── */
+.risk-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 18px;
+}
+
+.risk-main-grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 1200px) {
+  .risk-main-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.risk-project-item {
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.risk-project-item:hover {
+  border-color: #0f6c70;
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+
+.risk-project-item.selected {
+  border-color: #0f6c70;
+  background: #f0fdfa;
+  box-shadow: 0 0 0 2px #0f6c70;
+}
+
+.risk-badge-pill {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.risk-badge-critical {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.risk-badge-high {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+}
+
+.risk-badge-medium {
+  background: #fefce8;
+  color: #854d0e;
+  border: 1px solid #fef08a;
+}
+
+.risk-badge-low {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.shap-feature-bar {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.8fr) minmax(70px, 1fr) minmax(65px, 0.8fr) minmax(90px, 2fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: #f8fafc;
+  font-size: 11px;
+  border: 1px solid #e2e8f0;
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .shap-feature-bar {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
 }
 
 .form {
@@ -646,3 +772,131 @@ tbody tr:hover {
     display: inline-block;
   }
 }
+
+/* ── RISK INTELLIGENCE & SHAP EXPLAINABILITY ── */
+.risk-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.95fr);
+  gap: 18px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 1200px) {
+  .risk-main-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.risk-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.risk-project-item {
+  border: 1px solid #dde5e8;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.risk-project-item:hover {
+  border-color: #0f6c70;
+  background: #f4f9fa;
+  transform: translateY(-1px);
+}
+
+.risk-project-item.selected {
+  border: 2px solid #0f6c70;
+  background: #edf7f8;
+  box-shadow: 0 4px 12px rgba(15, 108, 112, 0.12);
+}
+
+.risk-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.risk-badge-pill.critical {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #f87171;
+}
+
+.risk-badge-pill.high {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fb923c;
+}
+
+.risk-badge-pill.medium {
+  background: #fefce8;
+  color: #854d0e;
+  border: 1px solid #facc15;
+}
+
+.risk-badge-pill.low {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #4ade80;
+}
+
+.risk-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.risk-stage-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.risk-stage-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.shap-bar-container {
+  display: grid;
+  grid-template-columns: minmax(140px, 2fr) minmax(70px, 1fr) minmax(80px, 1fr) minmax(100px, 2fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fafbfc;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 12px;
+}
+
+.shap-bar-container:hover {
+  background: #f1f5f9;
+}
+

@@ -2738,45 +2738,470 @@ function RiskIntelligence({ district, go }) {
   const { data, error } = useData(`/analytics/operations?district=${encodeURIComponent(dist)}`, 5000);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("ALL");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [selectedProject, setSelectedProject] = useState(null);
   const [explanationParcel, setExplanationParcel] = useState(null);
+  const [stageRisks, setStageRisks] = useState([]);
+  const [stageLoading, setStageLoading] = useState(false);
+
   const { data: explanation, error: explanationError } = useData(explanationParcel ? `/ml/parcels/${explanationParcel.parcel_id}/explanation` : null);
-  if (error || !data) return <DataPanel title={`Risk Intelligence (${dist})`} data={data} error={error} />;
+
   const risk = data?.risk || {};
   const topParcels = risk.top_parcels || [];
+  const projectWise = risk.project_wise || [];
+  const riskDist = data?.parcels?.risk_distribution || [];
+
+  // Auto-select initial project and parcel
+  useEffect(() => {
+    if (!selectedProject && projectWise.length > 0) {
+      setSelectedProject(projectWise[0]);
+    }
+  }, [projectWise, selectedProject]);
+
+  useEffect(() => {
+    if (!explanationParcel && topParcels.length > 0) {
+      setExplanationParcel(topParcels[0]);
+    }
+  }, [topParcels, explanationParcel]);
+
+  // Fetch 7-Stage Risk when project or parcel context changes
+  useEffect(() => {
+    let active = true;
+    setStageLoading(true);
+    const targetProjId = selectedProject?.project_id || (explanationParcel?.project_id || (projectWise[0]?.project_id || ""));
+    const targetDisputes = explanationParcel?.legal_disputes ?? (selectedProject?.high_risk > 0 ? 1 : 0);
+    const payload = {
+      district: dist,
+      project_id: targetProjId,
+      legal_disputes: targetDisputes,
+      area: explanationParcel?.area_acres || 2.5
+    };
+
+    api("/ml/stage-risk", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    })
+      .then(res => {
+        if (active && res && res.stages) {
+          setStageRisks(res.stages);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setStageLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [dist, selectedProject, explanationParcel, projectWise]);
+
+  if (error || !data) return <DataPanel title={`Risk Intelligence (${dist})`} data={data} error={error} />;
+
   const matches = row => `${row.parcel_id || ""} ${row.survey_no || ""} ${row.project_id || ""} ${row.project_name || ""} ${row.village || ""} ${row.taluk || ""} ${row.district || ""}`.toLowerCase().includes(query.toLowerCase());
   const rows = topParcels.filter(r => (category === "ALL" || r.risk_category === category) && matches(r));
-  const open = row => go({ project_id: row.project_id, parcel_id: row.parcel_id, record_id: row.record_id, survey_no: row.survey_no });
-  const riskDist = data?.parcels?.risk_distribution || [];
+
+  const filteredProjects = projectWise.filter(p => `${p.project_id || ""} ${p.project_name || ""}`.toLowerCase().includes(projectSearch.toLowerCase()));
+
+  const handleSelectProject = (proj) => {
+    setSelectedProject(proj);
+    const matchParcel = topParcels.find(p => p.project_id === proj.project_id);
+    if (matchParcel) {
+      setExplanationParcel(matchParcel);
+    }
+  };
+
+  const getBadgeClass = (cat) => {
+    const c = (cat || "").toUpperCase();
+    if (c === "CRITICAL") return "risk-badge-pill critical";
+    if (c === "HIGH") return "risk-badge-pill high";
+    if (c === "MEDIUM") return "risk-badge-pill medium";
+    return "risk-badge-pill low";
+  };
+
+  const totalRiskCount = risk.total || topParcels.length || 0;
+
   return (
     <>
       <Panel title={`Risk Intelligence · ${dist}`}>
-        <div className="toolbar"><input aria-label="Search risk records" placeholder="Search parcel, survey, project, village..." value={query} onChange={e => setQuery(e.target.value)} /><select value={category} onChange={e => setCategory(e.target.value)}><option value="ALL">All categories</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="CRITICAL">Critical</option></select><RefreshButton /></div>
+        <div className="toolbar" style={{ flexWrap: "wrap", gap: "10px" }}>
+          <input
+            aria-label="Search risk records"
+            placeholder="Search parcel, survey, project, village..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            style={{ flex: 1, minWidth: "220px" }}
+          />
+          <select value={category} onChange={e => setCategory(e.target.value)}>
+            <option value="ALL">All categories</option>
+            <option value="CRITICAL">Critical</option>
+            <option value="HIGH">High</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="LOW">Low</option>
+          </select>
+          <RefreshButton />
+        </div>
+
         {risk.prediction_count === 0 && <div className="notice">No risk predictions available for {dist}.</div>}
         {risk.synthetic_note && <div className="notice">{risk.synthetic_note}</div>}
+
         <div className="cards">
-          <div className="metric"><span>Total Risk Parcels</span><b>{risk.total || 0}</b></div>
-          {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map(level => <div className="metric" key={level}><span>{level} RISK</span><b>{riskDist.find(x => x.category === level)?.count || 0}</b></div>)}
-          <div className="metric"><span>Average Risk Score</span><b>{risk.average_score ?? "N/A"}</b></div>
+          <div className="metric">
+            <span>Total Risk Parcels</span>
+            <b>{totalRiskCount}</b>
+          </div>
+          {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(level => {
+            const count = riskDist.find(x => x.category === level)?.count || topParcels.filter(p => p.risk_category === level).length || 0;
+            return (
+              <div className="metric" key={level}>
+                <span>{level} RISK</span>
+                <b>{count}</b>
+              </div>
+            );
+          })}
+          <div className="metric">
+            <span>Average Risk Score</span>
+            <b>{risk.average_score ?? (topParcels.length ? (topParcels.reduce((a, b) => a + (b.risk_score || 0), 0) / topParcels.length).toFixed(1) : "N/A")}</b>
+          </div>
         </div>
       </Panel>
-      <div className="grid2">
-        <Panel title="Risk Distribution">{risk.prediction_count ? <Table rows={risk.prediction_distribution || []} cols={["category", "count"]} /> : <div className="empty">No risk predictions available.</div>}</Panel>
-        <Panel title="Project-wise Risk"><Table rows={(risk.project_wise || []).slice(0, 20)} cols={["project_id", "project_name", "parcels", "high_risk", "average_risk_score"]} onClick={r => go({ project_id: r.project_id })} /></Panel>
+
+      {/* Main Responsive 2-Column Grid */}
+      <div className="risk-main-grid">
+        {/* Left Column: Risk Distribution & Village-wise Risk */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "18px", minWidth: 0 }}>
+          <Panel title="Risk Distribution Analysis">
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", padding: "4px 0" }}>
+              {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(level => {
+                const count = riskDist.find(x => x.category === level)?.count || topParcels.filter(p => p.risk_category === level).length || 0;
+                const pct = totalRiskCount > 0 ? Math.round((count / totalRiskCount) * 100) : 0;
+                const color = level === 'CRITICAL' ? '#ef4444' : level === 'HIGH' ? '#f97316' : level === 'MEDIUM' ? '#eab308' : '#10b981';
+                return (
+                  <div key={level} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", fontWeight: 600 }}>
+                      <span className={getBadgeClass(level)}>{level}</span>
+                      <span>{count} parcels ({pct}%)</span>
+                    </div>
+                    <div style={{ height: "8px", background: "#f1f5f9", borderRadius: "6px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: "6px", transition: "width 0.3s ease" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {risk.prediction_distribution && risk.prediction_distribution.length > 0 && (
+              <div style={{ marginTop: "16px" }}>
+                <Table rows={risk.prediction_distribution} cols={["category", "count"]} />
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Village-wise Risk Breakdown">
+            <div style={{ maxHeight: "320px", overflowY: "auto" }}>
+              <Table rows={(risk.village_wise || []).slice(0, 30)} cols={["village", "taluk", "district", "parcels", "high_risk", "average_risk_score"]} />
+            </div>
+          </Panel>
+        </div>
+
+        {/* Right Column: Project-wise Risk Section */}
+        <div style={{ minWidth: 0 }}>
+          <Panel title="Project-wise Risk Intelligence">
+            <div style={{ marginBottom: "12px" }}>
+              <input
+                aria-label="Filter projects"
+                placeholder="Search projects by name or ID..."
+                value={projectSearch}
+                onChange={e => setProjectSearch(e.target.value)}
+                style={{ width: "100%", boxSizing: "border-box" }}
+              />
+            </div>
+            <div className="risk-project-list">
+              {filteredProjects.length === 0 ? (
+                <div className="empty">No matching projects found.</div>
+              ) : (
+                filteredProjects.map(p => {
+                  const isSelected = selectedProject?.project_id === p.project_id;
+                  const avgScore = Number(p.average_risk_score ?? 0);
+                  const cat = avgScore >= 75 ? "CRITICAL" : avgScore >= 50 ? "HIGH" : avgScore >= 25 ? "MEDIUM" : "LOW";
+                  return (
+                    <div
+                      key={p.project_id}
+                      className={`risk-project-item ${isSelected ? "selected" : ""}`}
+                      onClick={() => handleSelectProject(p)}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                        <div>
+                          <b style={{ fontSize: "13px", color: "#0f2e3d", display: "block" }}>{p.project_name || p.project_id}</b>
+                          <small style={{ color: "#64748b", fontSize: "11px" }}>ID: {p.project_id}</small>
+                        </div>
+                        <span className={getBadgeClass(cat)}>{cat}</span>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", fontSize: "11px", color: "#475569", background: "#f8fafc", padding: "6px 8px", borderRadius: "6px" }}>
+                        <div>Parcels: <b>{p.parcels || 0}</b></div>
+                        <div>High Risk: <b style={{ color: (p.high_risk || 0) > 0 ? "#dc2626" : "inherit" }}>{p.high_risk || 0}</b></div>
+                        <div>Avg Score: <b>{p.average_risk_score ?? "N/A"}</b></div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "2px" }}>
+                        <span style={{ fontSize: "11px", color: "#0f6c70", fontWeight: 600 }}>
+                          {isSelected ? "● Currently Selected" : "Click to Inspect Risk"}
+                        </span>
+                        <button
+                          type="button"
+                          className="table-control-btn"
+                          onClick={(e) => { e.stopPropagation(); go({ project_id: p.project_id }); }}
+                          title="Navigate to full project details"
+                        >
+                          View Project ↗
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </Panel>
+        </div>
       </div>
-      <Panel title="Village-wise Risk"><Table rows={(risk.village_wise || []).slice(0, 30)} cols={["village", "taluk", "district", "parcels", "high_risk", "average_risk_score"]} /></Panel>
-      <Panel title="Top High-risk Parcels">
-        <AlertTable rows={rows} columns={[{key:"parcel_id",label:"Parcel ID"},{key:"survey_no",label:"Survey Number"},{key:"project_id",label:"Project"},{key:"project_name",label:"Project Name"},{key:"village",label:"Village"},{key:"taluk",label:"Taluk"},{key:"district",label:"District"},{key:"risk_category",label:"Risk Category"},{key:"risk_score",label:"Risk Score",render:r=>r.risk_score ?? "N/A"},{key:"assessed_at",label:"Assessed"}]} onOpen={row => setExplanationParcel(row)} actionLabel="View Explanation" emptyMessage="No risk records available." />
+
+      {/* 7-Stage Statutory Acquisition Risk Analysis */}
+      <Panel title={`7-Stage Statutory Acquisition Risk Analysis ${selectedProject ? `· ${selectedProject.project_name || selectedProject.project_id}` : ""}`}>
+        {stageLoading ? (
+          <p>Calculating 7-stage statutory risk model predictions...</p>
+        ) : stageRisks.length === 0 ? (
+          <div className="empty">No stage risk analysis available. Select a project above.</div>
+        ) : (
+          <div className="risk-stage-grid">
+            {stageRisks.map((st, idx) => {
+              const score = Number(st.risk_score || 0);
+              const scoreColor = score >= 80 ? "#ef4444" : score >= 60 ? "#f97316" : score >= 30 ? "#eab308" : "#10b981";
+              return (
+                <div key={st.stage} className="risk-stage-card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b" }}>STAGE {idx + 1}</span>
+                    <span style={{
+                      fontSize: "11px",
+                      padding: "2px 7px",
+                      borderRadius: "10px",
+                      fontWeight: 600,
+                      background: st.status === "Pending" ? "#fee2e2" : "#dcfce7",
+                      color: st.status === "Pending" ? "#991b1b" : "#166534"
+                    }}>
+                      {st.status}
+                    </span>
+                  </div>
+                  <b style={{ fontSize: "14px", color: "#0f2e3d" }}>{st.stage}</b>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span className={getBadgeClass(st.risk_category)}>{st.risk_category}</span>
+                    <b style={{ fontSize: "13px", color: scoreColor }}>{st.risk_score} / 100</b>
+                  </div>
+                  <div style={{ height: "6px", background: "#f1f5f9", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(100, Math.max(5, score))}%`, background: scoreColor, borderRadius: "4px" }} />
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#475569", marginTop: "2px" }}>
+                    <b>Driver:</b> {st.reason}
+                  </div>
+                  <div style={{ fontSize: "11px", background: "#f8fafc", padding: "6px 8px", borderRadius: "6px", borderLeft: `3px solid ${scoreColor}`, color: "#1e293b", marginTop: "auto" }}>
+                    <b>Action:</b> {st.recommended_action}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Panel>
-      {explanationParcel && <RiskExplanation parcel={explanationParcel} explanation={explanation} error={explanationError} onClose={() => setExplanationParcel(null)} />}
+
+      {/* SHAP & Explainable AI Breakdown */}
+      {explanationParcel && (
+        <RiskExplanation
+          parcel={explanationParcel}
+          explanation={explanation}
+          error={explanationError}
+          onClose={() => setExplanationParcel(null)}
+        />
+      )}
+
+      {/* Top High-risk Parcels Table */}
+      <Panel title={`Top High-risk Land Parcels ${selectedProject ? `(Filtered for ${selectedProject.project_name || selectedProject.project_id})` : ""}`}>
+        <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+          <span style={{ fontSize: "12px", color: "#64748b" }}>
+            Showing {rows.length} high-risk parcel records. Click "Explain Risk" to inspect SHAP feature drivers.
+          </span>
+          {selectedProject && (
+            <button
+              type="button"
+              className="table-control-btn"
+              onClick={() => setSelectedProject(null)}
+            >
+              Clear Project Filter
+            </button>
+          )}
+        </div>
+        <AlertTable
+          rows={rows}
+          columns={[
+            { key: "parcel_id", label: "Parcel ID" },
+            { key: "survey_no", label: "Survey Number" },
+            { key: "project_id", label: "Project ID" },
+            { key: "project_name", label: "Project Name" },
+            { key: "village", label: "Village" },
+            { key: "taluk", label: "Taluk" },
+            { key: "district", label: "District" },
+            { key: "risk_category", label: "Risk Category", render: r => <span className={getBadgeClass(r.risk_category)}>{r.risk_category}</span> },
+            { key: "risk_score", label: "Risk Score", render: r => r.risk_score ?? "N/A" },
+            { key: "assessed_at", label: "Assessed" }
+          ]}
+          onOpen={row => setExplanationParcel(row)}
+          actionLabel="🔍 Explain Risk (SHAP)"
+          emptyMessage="No risk records available for the selected filters."
+        />
+      </Panel>
     </>
   );
 }
 
 function RiskExplanation({ parcel, explanation, error, onClose }) {
-  return <Panel title="PARCEL RISK EXPLANATION">
-    <button type="button" onClick={onClose}>Close Explanation</button>
-    <div className="status-card"><p><b>Survey Number:</b> {parcel.survey_no}</p><p><b>Village / Taluk:</b> {parcel.village} / {parcel.taluk}</p><p><b>Project:</b> {parcel.project_name || parcel.project_id}</p>{error ? <div className="error">Unable to load risk explanation ({error.status || "network error"}): {error.message}</div> : !explanation ? <p>Loading risk explanation...</p> : <><p><b>Model Risk Score:</b> {explanation.risk_score}</p><p><b>Model Risk Category:</b> {explanation.risk_category}</p><p><b>Stored Parcel Classification:</b> {explanation.stored_risk_category || "N/A"}</p><p><b>Model Confidence:</b> {(explanation.confidence * 100).toFixed(2)}%</p><p><b>Explainer:</b> {explanation.explanation_method} ({explanation.output_space})</p><p><b>Base Prediction:</b> {explanation.base_value} <b>Final Prediction:</b> {explanation.final_value}</p><h3>WHY DOES THE MODEL CLASSIFY THIS PARCEL THIS WAY?</h3><div>{explanation.features.slice(0,8).map(f => <div key={f.name + f.display_name} style={{display:"grid",gridTemplateColumns:"2fr 1fr 2fr",gap:"8px",alignItems:"center",margin:"6px 0"}}><span>{f.display_name}</span><span>{String(f.value ?? "N/A")}</span><span style={{color:f.shap_value >= 0 ? "#b42318" : "#16704a"}}>{f.shap_value >= 0 ? "+" : ""}{f.shap_value}</span><i style={{height:"8px",width:`${Math.min(100,Math.abs(f.shap_value)*400)}%`,background:f.shap_value >= 0 ? "#d92d20" : "#12b76a",display:"block"}} /></div>)}</div><h3>Recommended operational action based on risk factors</h3><ul>{explanation.recommended_actions.map(action => <li key={action}>{action}</li>)}</ul></>}</div>
-  </Panel>;
+  const getBadgeClass = (cat) => {
+    const c = (cat || "").toUpperCase();
+    if (c === "CRITICAL") return "risk-badge-pill critical";
+    if (c === "HIGH") return "risk-badge-pill high";
+    if (c === "MEDIUM") return "risk-badge-pill medium";
+    return "risk-badge-pill low";
+  };
+
+  return (
+    <Panel title="AI RISK MODEL EXPLANATION & SHAP DECISION BREAKDOWN">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+        <div style={{ fontSize: "13px", color: "#334155" }}>
+          Detailed SHAP feature attribution for Survey No. <b>{parcel.survey_no}</b> (Parcel ID: <b>{parcel.parcel_id}</b>)
+        </div>
+        <button type="button" onClick={onClose} style={{ padding: "4px 12px", borderRadius: "6px", cursor: "pointer" }}>
+          ✕ Close Explanation
+        </button>
+      </div>
+
+      <div className="status-card" style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "18px" }}>
+        {/* Metadata Banner */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "16px", paddingBottom: "14px", borderBottom: "1px solid #e2e8f0" }}>
+          <div>
+            <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Location Context</span>
+            <b style={{ fontSize: "13px" }}>{parcel.village}, {parcel.taluk} ({parcel.district || "District"})</b>
+          </div>
+          <div>
+            <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Project Name / ID</span>
+            <b style={{ fontSize: "13px" }}>{parcel.project_name || parcel.project_id || "N/A"}</b>
+          </div>
+          <div>
+            <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Survey Number</span>
+            <b style={{ fontSize: "13px" }}>{parcel.survey_no}</b>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="error">Unable to load risk explanation ({error.status || "network error"}): {error.message}</div>
+        ) : !explanation ? (
+          <p>Loading AI TreeSHAP model explanation and feature attributions...</p>
+        ) : (
+          <>
+            {/* KPI Cards for Model Metrics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "10px", marginBottom: "18px" }}>
+              <div style={{ background: "#ffffff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Model Risk Score</span>
+                <b style={{ fontSize: "20px", color: "#0f2e3d" }}>{explanation.risk_score}</b>
+              </div>
+              <div style={{ background: "#ffffff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Risk Category</span>
+                <span className={getBadgeClass(explanation.risk_category)} style={{ marginTop: "4px" }}>
+                  {explanation.risk_category}
+                </span>
+              </div>
+              <div style={{ background: "#ffffff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Model Confidence</span>
+                <b style={{ fontSize: "20px", color: "#0f766e" }}>{(explanation.confidence * 100).toFixed(1)}%</b>
+              </div>
+              <div style={{ background: "#ffffff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Explainer Method</span>
+                <b style={{ fontSize: "12px", color: "#334155", display: "block", marginTop: "4px" }}>{explanation.explanation_method}</b>
+                <small style={{ color: "#64748b" }}>{explanation.output_space}</small>
+              </div>
+              <div style={{ background: "#ffffff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                <span style={{ fontSize: "11px", color: "#64748b", display: "block" }}>Base vs Final Pred</span>
+                <span style={{ fontSize: "12px", display: "block", marginTop: "4px" }}>
+                  Base: <b>{explanation.base_value}</b> → Final: <b>{explanation.final_value}</b>
+                </span>
+              </div>
+            </div>
+
+            {/* SHAP Feature Contributions Chart */}
+            <div style={{ marginBottom: "18px" }}>
+              <h3 style={{ fontSize: "14px", margin: "0 0 8px 0", color: "#0f2e3d" }}>
+                SHAP FEATURE ATTRIBUTION BREAKDOWN
+              </h3>
+              <p style={{ fontSize: "11px", color: "#64748b", margin: "0 0 10px 0" }}>
+                Red bars indicate features pushing risk higher (+ SHAP score); green bars indicate features mitigating or lowering risk (- SHAP score).
+              </p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {explanation.features.slice(0, 10).map((f) => {
+                  const isPositive = f.shap_value >= 0;
+                  const barWidth = Math.min(100, Math.max(6, Math.abs(f.shap_value) * 350));
+                  return (
+                    <div key={f.name + f.display_name} className="shap-bar-container">
+                      <b style={{ color: "#1e293b" }}>{f.display_name}</b>
+                      <span style={{ color: "#64748b" }}>Val: <b>{String(f.value ?? "N/A")}</b></span>
+                      <span style={{ color: isPositive ? "#dc2626" : "#16a34a", fontWeight: 700 }}>
+                        {isPositive ? "+" : ""}{f.shap_value.toFixed(3)}
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", width: "100%", height: "14px", background: "#f1f5f9", borderRadius: "4px", padding: "2px" }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            width: `${barWidth}%`,
+                            background: isPositive ? "#ef4444" : "#10b981",
+                            borderRadius: "3px",
+                            transition: "width 0.3s ease"
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Recommended Strategic Actions */}
+            <div>
+              <h3 style={{ fontSize: "14px", margin: "0 0 8px 0", color: "#0f2e3d" }}>
+                RECOMMENDED OPERATIONAL ACTION PLAN
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {explanation.recommended_actions.map((action, i) => (
+                  <div
+                    key={action}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      background: "#ffffff",
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid #e2e8f0",
+                      fontSize: "12px",
+                      color: "#1e293b"
+                    }}
+                  >
+                    <span style={{ background: "#0f6c70", color: "#ffffff", width: "20px", height: "20px", borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 700, flexShrink: 0 }}>
+                      {i + 1}
+                    </span>
+                    <span>{action}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
 }
 
 function AlertsPage({ district, go }) {
