@@ -1,0 +1,158 @@
+from fastapi import APIRouter, Header, HTTPException
+from backend.core import conn, current_user, enforce_district_scope, check_resource_district
+
+router = APIRouter()
+
+from typing import Optional
+
+@router.get("/operations")
+def operations_dashboard(district: Optional[str] = None, authorization: str = Header(None)):
+    u = current_user(authorization)
+    if not u:
+        raise HTTPException(401, "Authentication required")
+    district = enforce_district_scope(u, district)
+
+    c = conn()
+    p_filter = f"AND p.district = '{district}'" if (district and district.lower() != "all") else ""
+    pa_filter = f"AND pa.district = '{district}'" if (district and district.lower() != "all") else ""
+
+    bottlenecks = [dict(r) for r in c.execute(f"""
+        SELECT p.project_id, p.project_name, p.district, p.current_stage,
+               p.progress, p.project_status, p.responsible_officer AS project_officer,
+               m.status AS milestone_status, m.planned_date, m.expected_date,
+               m.responsible_officer AS milestone_officer, m.delay_days,
+               CAST(COALESCE(MAX(0, julianday('now') - julianday(m.planned_date)), 0) AS INTEGER) AS days_at_stage
+        FROM projects p
+        JOIN project_milestones m ON m.project_id = p.project_id AND m.stage = p.current_stage
+        WHERE p.project_status NOT IN ('Completed', 'Closed')
+          AND m.status != 'Completed'
+          {p_filter}
+          AND (m.delay_days > 0 OR p.project_status IN ('Delayed', 'On Hold')
+               OR (m.planned_date IS NOT NULL AND julianday('now') > julianday(m.planned_date)))
+        ORDER BY m.delay_days DESC, days_at_stage DESC, p.project_id
+        LIMIT 500
+    """).fetchall()]
+
+    sla_rows = [dict(r) for r in c.execute(f"""
+        SELECT p.project_id, p.project_name, p.current_stage, p.project_status,
+               p.responsible_officer AS project_officer, m.status AS milestone_status,
+               m.expected_date AS due_date, m.responsible_officer AS milestone_officer,
+               m.delay_days,
+               CAST(julianday(m.expected_date) - julianday('now') AS INTEGER) AS date_days_remaining
+        FROM projects p
+        JOIN project_milestones m ON m.project_id = p.project_id AND m.stage = p.current_stage
+        WHERE p.project_status NOT IN ('Completed', 'Closed')
+          AND m.status != 'Completed'
+          AND m.expected_date IS NOT NULL
+          {p_filter}
+        ORDER BY date_days_remaining, p.project_id
+        LIMIT 500
+    """).fetchall()]
+
+    risks = [dict(r) for r in c.execute(f"""
+        SELECT pa.id AS parcel_id, pa.record_id, pa.survey_no, pa.village,
+               pa.project_id, p.project_name, p.current_stage,
+               COALESCE(rp.risk_category, pa.risk_category) AS risk_category,
+               COALESCE(rp.risk_score, pa.risk_score) AS risk_score,
+               COALESCE(rp.delay_probability, pa.delay_probability) AS delay_probability,
+               p.responsible_officer
+        FROM parcels pa
+        LEFT JOIN projects p ON p.project_id = pa.project_id
+        LEFT JOIN risk_predictions rp ON rp.id = (
+            SELECT MAX(id) FROM risk_predictions WHERE parcel_id = pa.id
+        )
+        WHERE COALESCE(rp.risk_category, pa.risk_category) IN ('HIGH', 'CRITICAL')
+        {pa_filter}
+        ORDER BY CASE COALESCE(rp.risk_category, pa.risk_category) WHEN 'CRITICAL' THEN 0 ELSE 1 END,
+                 COALESCE(rp.risk_score, pa.risk_score) DESC, pa.id
+        LIMIT 500
+    """).fetchall()]
+    c.close()
+
+    for row in bottlenecks:
+        row["responsible_officer"] = row.pop("milestone_officer") or row.pop("project_officer") or "Unassigned"
+        row["reason"] = (
+            f"{row['delay_days']:g} recorded delay days" if row["delay_days"]
+            else f"{row['days_at_stage']} days since stage started"
+        )
+        row["time_label"] = f"{row['days_at_stage']} days at stage"
+    for row in sla_rows:
+        row["responsible_officer"] = row.pop("milestone_officer") or row.pop("project_officer") or "Unassigned"
+        row["days_remaining"] = max(row["date_days_remaining"], 0)
+        row["days_overdue"] = max(-row["date_days_remaining"], 0)
+        row["sla_status"] = "SLA Breached" if row["date_days_remaining"] < 0 or row["delay_days"] > 0 else "SLA Due Soon"
+        row["reason"] = "Recorded milestone delay" if row["delay_days"] > 0 else "Milestone due date is approaching"
+    for row in risks:
+        row["responsible_officer"] = row["responsible_officer"] or "Unassigned"
+        row["risk_source"] = "Stored parcel risk classification"
+
+    return {
+        "process_bottlenecks": bottlenecks,
+        "sla_due_soon": [r for r in sla_rows if r["sla_status"] == "SLA Due Soon" and r["date_days_remaining"] <= 7],
+        "sla_breached": [r for r in sla_rows if r["sla_status"] == "SLA Breached"],
+        "risk_alerts": risks,
+        "risk_data_note": "Risk categories come from stored parcel fields; no new prediction is generated by this dashboard.",
+    }
+
+@router.get("/bottlenecks")
+def get_bottlenecks(district: Optional[str] = None, authorization: str = Header(None)):
+    c = conn()
+    u = current_user(authorization)
+    if u:
+        district = enforce_district_scope(u, district)
+    
+    where = ""
+    args = []
+    if district and district.lower() != "all":
+        where = "JOIN projects p ON project_milestones.project_id=p.project_id WHERE p.district=? AND"
+        args.append(district.strip())
+    else:
+        where = "WHERE"
+    
+    # Calculate average delay, pending cases, and breaches per stage
+    res = c.execute(f"""
+        SELECT stage, 
+               COUNT(*) as pending_cases, 
+               AVG(delay_days) as average_delay, 
+               SUM(CASE WHEN delay_days > 0 THEN 1 ELSE 0 END) as sla_breaches
+        FROM project_milestones 
+        {where} status != 'Completed'
+        GROUP BY stage
+        ORDER BY average_delay DESC
+    """, args).fetchall()
+    c.close()
+    
+    stages = []
+    for r in res:
+        delay = round(r["average_delay"] or 0)
+        action = "Review process"
+        if r["stage"] == "Compensation":
+            action = "Prioritize compensation assessment and payment processing."
+        elif r["stage"] == "Approval":
+            action = "Escalate to District Authority."
+            
+        stages.append({
+            "stage": r["stage"],
+            "pending_cases": r["pending_cases"],
+            "average_delay": delay,
+            "sla_breaches": r["sla_breaches"],
+            "recommended_action": action
+        })
+    
+    major_bottleneck = stages[0] if stages else None
+    
+    return {
+        "bottlenecks": stages,
+        "major_bottleneck": major_bottleneck
+    }
+
+@router.get("/timeline/{project_id}")
+def get_timeline(project_id: str, authorization: str = Header(None)):
+    c = conn()
+    u = current_user(authorization)
+    if u:
+        proj = c.execute("SELECT district FROM projects WHERE project_id=?", (project_id,)).fetchone()
+        if proj: check_resource_district(u, proj["district"], "Project Timeline")
+    milestones = c.execute("SELECT * FROM project_milestones WHERE project_id=? ORDER BY id ASC", (project_id,)).fetchall()
+    c.close()
+    return [dict(m) for m in milestones]

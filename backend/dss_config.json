@@ -1,0 +1,77 @@
+{
+  "version": "1.0.0",
+  "parcelPriority": {
+    "dataQuality": 0.25,
+    "gisRisk": 0.20,
+    "verificationDelay": 0.20,
+    "documentRisk": 0.15,
+    "previousIssues": 0.10,
+    "reverification": 0.10
+  },
+  "projectRisk": {
+    "slaRisk": 0.25,
+    "bottleneckRisk": 0.20,
+    "dataQuality": 0.20,
+    "verificationRisk": 0.15,
+    "grievanceRisk": 0.10,
+    "workflowDelay": 0.10
+  },
+  "districtPriority": {
+    "slaDelay": 0.30,
+    "verificationBacklog": 0.20,
+    "riskScore": 0.15,
+    "repeatedIssues": 0.15,
+    "grievanceEscalation": 0.10,
+    "dataQuality": 0.10
+  },
+  "statePriority": {
+    "projectRisk": 0.30,
+    "slaRisk": 0.25,
+    "bottleneckSeverity": 0.20,
+    "districtBacklog": 0.15,
+    "grievance": 0.10
+  },
+  "gisRisk": {
+    "coordinateRisk": 0.30,
+    "boundaryRisk": 0.30,
+    "geometryRisk": 0.20,
+    "areaConsistency": 0.20
+  },
+  "slaRisk": {
+    "deadlineProximity": 0.40,
+    "pendingDuration": 0.30,
+    "historicalDelay": 0.20,
+    "dependencyDelay": 0.10
+  },
+  "bottleneck": {
+    "avgPendingDuration": 0.40,
+    "pendingRecords": 0.30,
+    "slaBreaches": 0.20,
+    "repeatedIssues": 0.10
+  },
+  "masterRisk": {
+    "slaRisk": 0.25,
+    "workflowDelay": 0.20,
+    "dataQuality": 0.20,
+    "gisRisk": 0.15,
+    "verificationRisk": 0.10,
+    "grievanceRisk": 0.10
+  },
+  "riskThresholds": {
+    "low": 30,
+    "moderate": 50,
+    "high": 70,
+    "critical": 100
+  },
+  "dataQualityThresholds": {
+    "critical": 49,
+    "attention": 74,
+    "acceptable": 89,
+    "good": 100
+  },
+  "requiredParcelFields": [
+    "record_id", "survey_no", "village", "taluk", "district",
+    "area", "classification", "project_id", "latitude", "longitude",
+    "validation_status", "owner_reference"
+  ]
+}
