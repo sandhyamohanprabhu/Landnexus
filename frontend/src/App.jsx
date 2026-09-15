@@ -78,9 +78,19 @@ function Login({ onLogin }) {
   const [regSuccess, setRegSuccess] = useState("");
 
   const handleLogin = async (loginEmail, loginPwd) => {
+    const cleanEmail = (loginEmail || "").trim();
+    const cleanPwd = loginPwd || "";
+    if (!cleanEmail) {
+      setErr("Please enter your official or registered email address.");
+      return;
+    }
+    if (!cleanPwd) {
+      setErr("Please enter your password.");
+      return;
+    }
     setLoading(true); setErr(""); setRegSuccess("");
     try {
-      let x = await api(AUTH_LOGIN_PATH, { method: "POST", body: JSON.stringify({ email: loginEmail, password: loginPwd }) });
+      let x = await api(AUTH_LOGIN_PATH, { method: "POST", body: JSON.stringify({ email: cleanEmail, password: cleanPwd }) });
       if (!x || !x.access_token || !x.user) {
         throw Error("Login succeeded but no user session was returned by the server.");
       }
@@ -97,12 +107,12 @@ function Login({ onLogin }) {
       let x = await api("/auth/citizen/register", {
         method: "POST",
         body: JSON.stringify({
-          full_name: regName,
-          email: regEmail,
+          full_name: (regName || "").trim(),
+          email: (regEmail || "").trim(),
           password: regPassword,
-          phone: regPhone,
-          survey_no: regSurveyNo,
-          district: regDistrict
+          phone: (regPhone || "").trim(),
+          survey_no: (regSurveyNo || "").trim(),
+          district: (regDistrict || "").trim()
         })
       });
       if (!x || !x.access_token || !x.user) {
@@ -118,9 +128,16 @@ function Login({ onLogin }) {
     }
   };
 
+  const selectPreset = (email, pwd = "Tngov@CBE#2026") => {
+    setE(email);
+    setP(pwd);
+    setErr("");
+    setRegSuccess("");
+  };
+
   return (
     <div className="login">
-      <div className="login-card" style={{ maxWidth: "480px" }}>
+      <div className="login-card" style={{ maxWidth: "520px" }}>
         <div className="brand-mark">L</div>
         <h1 style={{ margin: "4px 0" }}>LANDNEXUS</h1>
         <p style={{ color: "#64748b", fontSize: "13px", marginTop: 0 }}>
@@ -144,7 +161,7 @@ function Login({ onLogin }) {
           </button>
           <button
             type="button"
-            onClick={() => { setMode("citizen_login"); setE(""); setP(""); setErr(""); setRegSuccess(""); }}
+            onClick={() => { setMode("citizen_login"); setE("citizen@cbe.ac.in"); setP("Tngov@CBE#2026"); setErr(""); setRegSuccess(""); }}
             style={{
               flex: 1, padding: "8px", border: "none", borderRadius: "6px", cursor: "pointer",
               fontWeight: 700, fontSize: "12px",
@@ -162,58 +179,88 @@ function Login({ onLogin }) {
 
         {/* Mode 1: Official Login */}
         {mode === "official" && (
-          <>
-            <input value={e} onChange={x => setE(x.target.value)} placeholder="Official email (e.g. district.coimbatore@tngov.in)" />
-            <input type="password" value={p} onChange={x => setP(x.target.value)} placeholder="Password" />
-            <button disabled={loading} onClick={() => handleLogin(e, p)}>
-              {loading ? "Authenticating..." : "Secure Login"}
+          <form onSubmit={(ev) => { ev.preventDefault(); handleLogin(e, p); }} style={{ textAlign: "left" }}>
+            <label style={{ fontSize: "11px", fontWeight: 700, color: "#334155", display: "block", marginBottom: "4px" }}>
+              Official Email Address
+            </label>
+            <input value={e} onChange={x => setE(x.target.value)} placeholder="Official email (e.g. district.coimbatore@tngov.in)" style={{ width: "100%", marginBottom: "10px" }} />
+            
+            <label style={{ fontSize: "11px", fontWeight: 700, color: "#334155", display: "block", marginBottom: "4px" }}>
+              Secure Password
+            </label>
+            <input type="password" value={p} onChange={x => setP(x.target.value)} placeholder="Password (Default: Tngov@CBE#2026)" style={{ width: "100%", marginBottom: "12px" }} />
+            
+            <button type="submit" disabled={loading} style={{ width: "100%", padding: "10px", fontSize: "13px", fontWeight: 700 }}>
+              {loading ? "Authenticating Official..." : "Secure Login"}
             </button>
-            <div style={{ fontSize: "11px", color: "#475569", marginTop: "14px", lineHeight: "1.6", textAlign: "left", background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-              <div style={{ fontWeight: 800, color: "#0f172a", marginBottom: "4px" }}>District Authorities (Pass: Tngov@CBE#2026):</div>
-              <div style={{ fontFamily: "monospace", fontSize: "11px" }}>
-                • district.coimbatore@tngov.in<br />
-                • district.tiruppur@tngov.in<br />
-                • district.erode@tngov.in<br />
-                • district.salem@tngov.in<br />
-                • district.namakkal@tngov.in
+
+            {/* Quick 1-Click Role Fill Buttons */}
+            <div style={{ fontSize: "11px", color: "#475569", marginTop: "14px", lineHeight: "1.6", background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ fontWeight: 800, color: "#0f172a", marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>⚡ 1-Click Role Presets (Pass: Tngov@CBE#2026)</span>
               </div>
-              <div style={{ fontWeight: 800, color: "#0f172a", marginTop: "8px", marginBottom: "4px" }}>Field Officers (Pass: Tngov@CBE#2026):</div>
-              <div style={{ fontFamily: "monospace", fontSize: "11px" }}>
-                • field.coimbatore@tngov.in<br />
-                • field.tiruppur@tngov.in<br />
-                • field.erode@tngov.in<br />
-                • field.salem@tngov.in<br />
-                • field.namakkal@tngov.in
+
+              {/* National & State Authorities */}
+              <div style={{ fontSize: "10px", fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>National & State Authorities:</div>
+              <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", marginBottom: "8px" }}>
+                <button type="button" onClick={() => selectPreset("national.admin@landnexus.gov")} style={{ padding: "4px 8px", fontSize: "10.5px", background: e === "national.admin@landnexus.gov" ? "#2563eb" : "#eff6ff", color: e === "national.admin@landnexus.gov" ? "#ffffff" : "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}>
+                  🌐 National Authority
+                </button>
+                <button type="button" onClick={() => selectPreset("state.tamilnadu@tngov.in")} style={{ padding: "4px 8px", fontSize: "10.5px", background: e === "state.tamilnadu@tngov.in" ? "#0f766e" : "#f0fdfa", color: e === "state.tamilnadu@tngov.in" ? "#ffffff" : "#0f766e", border: "1px solid #99f6e4", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}>
+                  🏛️ State (Tamil Nadu)
+                </button>
+                <button type="button" onClick={() => selectPreset("state.kerala@kerala.gov.in")} style={{ padding: "4px 8px", fontSize: "10.5px", background: e === "state.kerala@kerala.gov.in" ? "#0f766e" : "#f0fdfa", color: e === "state.kerala@kerala.gov.in" ? "#ffffff" : "#0f766e", border: "1px solid #99f6e4", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}>
+                  🌴 State (Kerala)
+                </button>
+                <button type="button" onClick={() => selectPreset("admin@survi.gov.in")} style={{ padding: "4px 8px", fontSize: "10.5px", background: e === "admin@survi.gov.in" ? "#475569" : "#f1f5f9", color: e === "admin@survi.gov.in" ? "#ffffff" : "#334155", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}>
+                  ⚙️ Admin
+                </button>
               </div>
-              <div style={{ fontWeight: 800, color: "#0f172a", marginTop: "8px", marginBottom: "4px" }}>State Authorities (Pass: Tngov@CBE#2026):</div>
-              <div style={{ fontFamily: "monospace", fontSize: "11px" }}>
-                • state.tamilnadu@tngov.in (Tamil Nadu)<br />
-                • state.kerala@kerala.gov.in (Kerala)<br />
-                • state@cbe.ac.in (Coimbatore demo)
+
+              {/* District Authorities */}
+              <div style={{ fontSize: "10px", fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>District Authorities (5 Districts):</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: "4px", marginBottom: "8px" }}>
+                {["coimbatore", "tiruppur", "erode", "salem", "namakkal"].map(dist => {
+                  const targetEmail = `district.${dist}@tngov.in`;
+                  const isSel = e === targetEmail;
+                  return (
+                    <button key={dist} type="button" onClick={() => selectPreset(targetEmail)} style={{ padding: "4px 6px", fontSize: "10px", background: isSel ? "#0f6c70" : "#f8fafc", color: isSel ? "#ffffff" : "#0f172a", border: isSel ? "1px solid #0f6c70" : "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", fontWeight: 600, textTransform: "capitalize" }}>
+                      ★ {dist}
+                    </button>
+                  );
+                })}
               </div>
-              <div style={{ fontWeight: 800, color: "#0f172a", marginTop: "8px", marginBottom: "4px" }}>National Authority (Pass: Tngov@CBE#2026):</div>
-              <div style={{ fontFamily: "monospace", fontSize: "11px" }}>
-                • national.admin@landnexus.gov (National Scope · All Districts)<br />
-                • Tngov@cbe.ac.in (Master Authority)
+
+              {/* Field Officers */}
+              <div style={{ fontSize: "10px", fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>Field Verification Officers:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: "4px", marginBottom: "8px" }}>
+                {["coimbatore", "tiruppur", "erode", "salem", "namakkal"].map(dist => {
+                  const targetEmail = `field.${dist}@tngov.in`;
+                  const isSel = e === targetEmail;
+                  return (
+                    <button key={dist} type="button" onClick={() => selectPreset(targetEmail)} style={{ padding: "4px 6px", fontSize: "10px", background: isSel ? "#d97706" : "#fffbeb", color: isSel ? "#ffffff" : "#92400e", border: isSel ? "1px solid #d97706" : "1px solid #fde68a", borderRadius: "4px", cursor: "pointer", fontWeight: 600, textTransform: "capitalize" }}>
+                      📍 {dist}
+                    </button>
+                  );
+                })}
               </div>
-              <div style={{ marginTop: "12px", borderTop: "1px solid #e2e8f0", paddingTop: "8px" }}>
-                <div style={{ fontSize: "10px", fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: "6px" }}>Quick Sign-In:</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
-                  <button
-                    type="button"
-                    onClick={() => { setE("district.coimbatore@tngov.in"); setP("Tngov@CBE#2026"); }}
-                    style={{ padding: "6px 8px", fontSize: "11px", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: "6px", cursor: "pointer", fontWeight: 600, textAlign: "left" }}
-                  >
-                    ★ Coimbatore District
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setE("national.admin@landnexus.gov"); setP("Tngov@CBE#2026"); }}
-                    style={{ padding: "6px 8px", fontSize: "11px", background: "#eff6ff", color: "#1e40af", border: "1px solid #bfdbfe", borderRadius: "6px", cursor: "pointer", fontWeight: 700, textAlign: "left" }}
-                  >
-                    🌐 National Authority
-                  </button>
-                </div>
+
+              {/* Acquisition Officers */}
+              <div style={{ fontSize: "10px", fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>Acquisition Officers:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: "4px", marginBottom: "8px" }}>
+                {["coimbatore", "tiruppur", "erode", "salem", "namakkal"].map(dist => {
+                  const targetEmail = `officer.${dist}@tngov.in`;
+                  const isSel = e === targetEmail;
+                  return (
+                    <button key={dist} type="button" onClick={() => selectPreset(targetEmail)} style={{ padding: "4px 6px", fontSize: "10px", background: isSel ? "#7c3aed" : "#faf5ff", color: isSel ? "#ffffff" : "#6b21a8", border: isSel ? "1px solid #7c3aed" : "1px solid #e9d5ff", borderRadius: "4px", cursor: "pointer", fontWeight: 600, textTransform: "capitalize" }}>
+                      📋 {dist}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Direct Demo / Preview Helpers */}
+              <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "8px", marginTop: "8px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -226,23 +273,17 @@ function Login({ onLogin }) {
                     });
                   }}
                   style={{
-                    marginTop: "8px",
-                    width: "100%",
-                    padding: "7px 10px",
+                    padding: "6px 8px",
                     background: "#f0fdf4",
                     color: "#166534",
                     border: "1px dashed #22c55e",
                     borderRadius: "6px",
                     cursor: "pointer",
                     fontWeight: 700,
-                    fontSize: "11px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px"
+                    fontSize: "10.5px"
                   }}
                 >
-                  ⚡ Preview UI Directly (No Backend Required)
+                  ⚡ Direct UI Preview
                 </button>
                 <button
                   type="button"
@@ -257,41 +298,57 @@ function Login({ onLogin }) {
                     });
                   }}
                   style={{
-                    marginTop: "6px",
-                    width: "100%",
-                    padding: "7px 10px",
+                    padding: "6px 8px",
                     background: "rgba(6, 182, 212, 0.1)",
                     color: "#0891b2",
                     border: "1px dashed #06b6d4",
                     borderRadius: "6px",
                     cursor: "pointer",
                     fontWeight: 700,
-                    fontSize: "11px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px"
+                    fontSize: "10.5px"
                   }}
                 >
-                  🎮 Launch Interactive Guided Tour Demo
+                  🎮 Guided Tour Demo
                 </button>
               </div>
             </div>
-          </>
+          </form>
         )}
 
         {/* Mode 2: Citizen Login */}
         {mode === "citizen_login" && (
-          <>
-            <div style={{ textAlign: "left", marginBottom: "12px", fontSize: "12px", color: "#475569" }}>
+          <form onSubmit={(ev) => { ev.preventDefault(); handleLogin(e, p); }} style={{ textAlign: "left" }}>
+            <div style={{ marginBottom: "12px", fontSize: "12px", color: "#475569" }}>
               Sign in with your registered citizen email to track your land acquisition compensation, R&R entitlement, and grievances.
             </div>
-            <input value={e} onChange={x => setE(x.target.value)} placeholder="Registered email address" />
-            <input type="password" value={p} onChange={x => setP(x.target.value)} placeholder="Password" />
-            <button disabled={loading} onClick={() => handleLogin(e, p)} style={{ background: "#0f6c70" }}>
-              {loading ? "Authenticating..." : "Citizen Sign-In"}
+            <label style={{ fontSize: "11px", fontWeight: 700, color: "#334155", display: "block", marginBottom: "4px" }}>
+              Registered Citizen Email
+            </label>
+            <input value={e} onChange={x => setE(x.target.value)} placeholder="Registered email (e.g. citizen@cbe.ac.in)" style={{ width: "100%", marginBottom: "10px" }} />
+            
+            <label style={{ fontSize: "11px", fontWeight: 700, color: "#334155", display: "block", marginBottom: "4px" }}>
+              Citizen Password
+            </label>
+            <input type="password" value={p} onChange={x => setP(x.target.value)} placeholder="Password (Default: Tngov@CBE#2026)" style={{ width: "100%", marginBottom: "12px" }} />
+            
+            <button type="submit" disabled={loading} style={{ width: "100%", padding: "10px", fontSize: "13px", fontWeight: 700, background: "#0f6c70" }}>
+              {loading ? "Authenticating Citizen..." : "Citizen Sign-In"}
             </button>
-            <div style={{ marginTop: "14px", fontSize: "12px", color: "#475569" }}>
+
+            {/* Demo Citizen Presets */}
+            <div style={{ marginTop: "12px", padding: "10px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "11px" }}>
+              <div style={{ fontWeight: 700, color: "#334155", marginBottom: "4px" }}>Demo Landowner Accounts:</div>
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                <button type="button" onClick={() => selectPreset("citizen@cbe.ac.in")} style={{ padding: "4px 8px", fontSize: "10.5px", background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}>
+                  👤 citizen@cbe.ac.in
+                </button>
+                <button type="button" onClick={() => selectPreset("citizen.demo.syn001@example.com")} style={{ padding: "4px 8px", fontSize: "10.5px", background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}>
+                  👤 citizen.demo.syn001@example.com
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: "14px", fontSize: "12px", color: "#475569", textAlign: "center" }}>
               New landowner / affected citizen?{" "}
               <button
                 type="button"
@@ -301,14 +358,14 @@ function Login({ onLogin }) {
                 Register with Survey Number
               </button>
             </div>
-          </>
+          </form>
         )}
 
         {/* Mode 3: Citizen Self-Registration */}
         {mode === "citizen_register" && (
           <form onSubmit={handleCitizenRegister} style={{ textAlign: "left", display: "grid", gap: "10px" }}>
             <div style={{ fontSize: "12px", color: "#475569", marginBottom: "4px" }}>
-              Enter your government survey number and district to link your land records.
+              Enter your government survey number and district to link your verified land records.
             </div>
             <label style={{ fontSize: "11px", fontWeight: 700, color: "#334155" }}>
               Full Name *
@@ -340,7 +397,7 @@ function Login({ onLogin }) {
                 <input value={regPhone} onChange={x => setRegPhone(x.target.value)} placeholder="+91..." style={{ width: "100%", marginTop: "2px" }} />
               </label>
             </div>
-            <button type="submit" disabled={loading} style={{ background: "#0f6c70", marginTop: "6px" }}>
+            <button type="submit" disabled={loading} style={{ background: "#0f6c70", marginTop: "6px", padding: "10px", fontWeight: 700 }}>
               {loading ? "Verifying & Registering..." : "Verify & Register Land Record"}
             </button>
             <div style={{ textAlign: "center", marginTop: "6px", fontSize: "12px" }}>
@@ -8689,6 +8746,10 @@ function App() {
       setPage('district_dashboard');
     } else if (u.role === 'field_officer') {
       setPage('field');
+    } else if (u.role === 'acquisition_officer') {
+      setPage('projects');
+    } else {
+      setPage('dashboard');
     }
   };
 

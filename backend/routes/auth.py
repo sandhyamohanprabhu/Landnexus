@@ -15,8 +15,10 @@ class CitizenRegister(BaseModel):
 
 @router.post("/login")
 def login(x:Login):
- c=conn(); u=c.execute("SELECT * FROM users WHERE lower(email)=lower(?) AND active=1",(x.email,)).fetchone(); c.close()
- if not u or not verify(x.password,u["password_hash"]): raise HTTPException(401,"Invalid credentials")
+ email = (x.email or "").strip()
+ pwd = x.password or ""
+ c=conn(); u=c.execute("SELECT * FROM users WHERE lower(email)=lower(?) AND active=1",(email,)).fetchone(); c.close()
+ if not u or not verify(pwd,u["password_hash"]): raise HTTPException(401,"Invalid credentials")
  u_dict = dict(u)
  return {
   "access_token": token(u_dict["email"], u_dict["role"], u_dict.get("district_scope"), u_dict.get("state_scope")),
@@ -32,16 +34,21 @@ def login(x:Login):
 
 @router.post("/citizen/register")
 def citizen_register(x: CitizenRegister):
- if not x.email or "@" not in x.email:
+ email = (x.email or "").strip()
+ pwd = x.password or ""
+ survey_no = (x.survey_no or "").strip()
+ district = (x.district or "").strip()
+
+ if not email or "@" not in email:
   raise HTTPException(400, "Valid email address is required")
- if len(x.password) < 6:
+ if len(pwd) < 6:
   raise HTTPException(400, "Password must be at least 6 characters")
- if not x.survey_no or not x.district:
+ if not survey_no or not district:
   raise HTTPException(400, "Survey number and district are required")
 
  c = conn()
  try:
-  existing = c.execute("SELECT id FROM users WHERE lower(email)=lower(?)", (x.email,)).fetchone()
+  existing = c.execute("SELECT id FROM users WHERE lower(email)=lower(?)", (email,)).fetchone()
   if existing:
    raise HTTPException(400, "An account with this email already exists")
 
@@ -52,31 +59,36 @@ def citizen_register(x: CitizenRegister):
    FROM parcels 
    WHERE lower(district)=lower(?) AND lower(survey_no)=lower(?)
    ORDER BY id ASC LIMIT 1
-  """, (x.district.strip(), x.survey_no.strip())).fetchone()
+  """, (district, survey_no)).fetchone()
 
   if not parcel:
    # Do NOT create a parcel. Return verification required message
    raise HTTPException(404, "Survey number not found. Verification required.")
 
   # Link citizen to the existing parcel
-  c.execute("UPDATE parcels SET owner_reference=? WHERE id=?", (x.email, parcel["id"]))
+  c.execute("UPDATE parcels SET owner_reference=? WHERE id=?", (email, parcel["id"]))
+
+  # Determine state scope dynamically from parcel district
+  p_dist = str(parcel["district"]).strip()
+  kerala_districts = ["palakkad", "ernakulam", "thrissur", "thiruvananthapuram"]
+  state_sc = "Kerala" if p_dist.lower() in kerala_districts else "Tamil Nadu"
 
   # Insert user record
   c.execute("""
    INSERT INTO users(email, password_hash, role, district_scope, state_scope, active, is_authority)
-   VALUES(?, ?, 'citizen', ?, 'Tamil Nadu', 1, 0)
-  """, (x.email, hash_password(x.password), parcel["district"]))
+   VALUES(?, ?, 'citizen', ?, ?, 1, 0)
+  """, (email, hash_password(pwd), p_dist, state_sc))
   c.commit()
 
   u_dict = {
-   "email": x.email,
+   "email": email,
    "role": "citizen",
-   "district_scope": parcel["district"],
-   "state_scope": "Tamil Nadu",
+   "district_scope": p_dist,
+   "state_scope": state_sc,
    "is_authority": False
   }
 
-  audit(x.email, "CITIZEN_REGISTER", "user", x.email, new_value=f"linked_parcel_{parcel['id']}")
+  audit(email, "CITIZEN_REGISTER", "user", email, new_value=f"linked_parcel_{parcel['id']}")
 
   return {
    "message": "Citizen registration successful. Linked to verified land parcel.",
@@ -108,24 +120,25 @@ def me(authorization:str=Header(None)):
 @router.get("/users")
 def users(authorization:str=Header(None)):
  u=current_user(authorization)
- if not u or u["role"]!="authority": raise HTTPException(403,"Authority only")
- c=conn(); rows=[dict(r) for r in c.execute("SELECT id,email,role,active,is_authority,created_at FROM users ORDER BY id").fetchall()]; c.close(); return rows
+ if not u or u["role"] not in ("authority", "national_authority", "admin"): raise HTTPException(403,"Authority or Admin only")
+ c=conn(); rows=[dict(r) for r in c.execute("SELECT id,email,role,district_scope,state_scope,active,is_authority,created_at FROM users ORDER BY id").fetchall()]; c.close(); return rows
 @router.post("/users")
 def add_user(x:UserIn,authorization:str=Header(None)):
  u=current_user(authorization)
- if not u or u["role"]!="authority": raise HTTPException(403,"Authority only")
- if x.role not in ("admin","acquisition_officer","field_officer","citizen") or x.email.lower()==AUTH_EMAIL.lower(): raise HTTPException(400,"Invalid role or protected authority account")
+ if not u or u["role"] not in ("authority", "national_authority", "admin"): raise HTTPException(403,"Authority or Admin only")
+ allowed_roles = ("admin", "authority", "national_authority", "state_authority", "district_authority", "acquisition_officer", "field_officer", "citizen")
+ if x.role not in allowed_roles or x.email.strip().lower()==AUTH_EMAIL.lower(): raise HTTPException(400,"Invalid role or protected authority account")
  if len(x.password)<8: raise HTTPException(400,"Password must be at least 8 characters")
  c=conn()
- try: c.execute("INSERT INTO users(email,password_hash,role) VALUES(?,?,?)",(x.email,hash_password(x.password),x.role)); c.commit()
+ try: c.execute("INSERT INTO users(email,password_hash,role) VALUES(?,?,?)",(x.email.strip(),hash_password(x.password),x.role)); c.commit()
  except Exception: raise HTTPException(400,"Unable to create user: duplicate or invalid account")
  finally: c.close()
- audit(u["email"],"CREATE_USER","user",x.email,new_value=x.role); return {"message":"User created"}
+ audit(u["email"],"CREATE_USER","user",x.email.strip(),new_value=x.role); return {"message":"User created"}
 @router.delete("/users/{user_id}")
 def disable_user(user_id:int,authorization:str=Header(None)):
  u=current_user(authorization)
- if not u or u["role"]!="authority": raise HTTPException(403,"Authority only")
+ if not u or u["role"] not in ("authority", "national_authority", "admin"): raise HTTPException(403,"Authority or Admin only")
  c=conn(); row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
  if not row: c.close(); raise HTTPException(404,"User not found")
- if row["is_authority"] or row["email"].lower()==AUTH_EMAIL.lower(): c.close(); raise HTTPException(400,"Permanent TNGOV Authority cannot be disabled")
+ if row["is_authority"] or row["email"].lower()==AUTH_EMAIL.lower() or row["email"].lower()=="national.admin@landnexus.gov": c.close(); raise HTTPException(400,"Permanent Authority accounts cannot be disabled")
  c.execute("UPDATE users SET active=0 WHERE id=?",(user_id,)); c.commit(); c.close(); audit(u["email"],"DISABLE_USER","user",row["email"]); return {"message":"User disabled"}

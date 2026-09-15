@@ -166,33 +166,53 @@ CREATE TABLE IF NOT EXISTS workflow(project_id TEXT,stage TEXT,status TEXT,notes
  if not row: c.execute('INSERT INTO users(email,password_hash,role,district_scope,state_scope,is_authority) VALUES(?,?,?, "Coimbatore", "Tamil Nadu", 1)',(AUTH_EMAIL,hash_password(AUTH_PASSWORD),'authority'))
  else: c.execute('UPDATE users SET is_authority=1,role="authority",district_scope="Coimbatore",state_scope="Tamil Nadu",active=1 WHERE lower(email)=lower(?)',(AUTH_EMAIL,))
  
- # 5 District Authorities and 5 Field Officers (all scoped to state_scope='Tamil Nadu')
+ # Complete authorized accounts suite with guaranteed credentials (Pass: Tngov@CBE#2026)
  accounts = [
+  # National Authority & System Administrators
+  ("national.admin@landnexus.gov", hash_password(AUTH_PASSWORD), "national_authority", None, None, 1),
+  ("admin@survi.gov.in", hash_password(AUTH_PASSWORD), "admin", None, None, 1),
+  ("admin@cbe.ac.in", hash_password(AUTH_PASSWORD), "admin", None, None, 1),
   # State Authorities
   ("state.tamilnadu@tngov.in", hash_password(AUTH_PASSWORD), "state_authority", None, "Tamil Nadu", 1),
   ("state.kerala@kerala.gov.in", hash_password(AUTH_PASSWORD), "state_authority", None, "Kerala", 1),
   ("state@cbe.ac.in", hash_password(AUTH_PASSWORD), "state_authority", None, "Tamil Nadu", 1),
-  # District Authorities
+  # District Authorities (All 5 Districts + Demo)
   ("district.coimbatore@tngov.in", hash_password(AUTH_PASSWORD), "district_authority", "Coimbatore", "Tamil Nadu", 1),
   ("district.tiruppur@tngov.in", hash_password(AUTH_PASSWORD), "district_authority", "Tiruppur", "Tamil Nadu", 1),
   ("district.erode@tngov.in", hash_password(AUTH_PASSWORD), "district_authority", "Erode", "Tamil Nadu", 1),
   ("district.salem@tngov.in", hash_password(AUTH_PASSWORD), "district_authority", "Salem", "Tamil Nadu", 1),
   ("district.namakkal@tngov.in", hash_password(AUTH_PASSWORD), "district_authority", "Namakkal", "Tamil Nadu", 1),
-  # Field Officers
+  ("district@cbe.ac.in", hash_password(AUTH_PASSWORD), "district_authority", "Coimbatore", "Tamil Nadu", 1),
+  # Acquisition Officers (All 5 Districts)
+  ("officer.coimbatore@tngov.in", hash_password(AUTH_PASSWORD), "acquisition_officer", "Coimbatore", "Tamil Nadu", 0),
+  ("officer.tiruppur@tngov.in", hash_password(AUTH_PASSWORD), "acquisition_officer", "Tiruppur", "Tamil Nadu", 0),
+  ("officer.erode@tngov.in", hash_password(AUTH_PASSWORD), "acquisition_officer", "Erode", "Tamil Nadu", 0),
+  ("officer.salem@tngov.in", hash_password(AUTH_PASSWORD), "acquisition_officer", "Salem", "Tamil Nadu", 0),
+  ("officer.namakkal@tngov.in", hash_password(AUTH_PASSWORD), "acquisition_officer", "Namakkal", "Tamil Nadu", 0),
+  # Field Officers (All 5 Districts + Demo)
   ("field.coimbatore@tngov.in", hash_password(AUTH_PASSWORD), "field_officer", "Coimbatore", "Tamil Nadu", 0),
   ("field.tiruppur@tngov.in", hash_password(AUTH_PASSWORD), "field_officer", "Tiruppur", "Tamil Nadu", 0),
   ("field.erode@tngov.in", hash_password(AUTH_PASSWORD), "field_officer", "Erode", "Tamil Nadu", 0),
   ("field.salem@tngov.in", hash_password(AUTH_PASSWORD), "field_officer", "Salem", "Tamil Nadu", 0),
   ("field.namakkal@tngov.in", hash_password(AUTH_PASSWORD), "field_officer", "Namakkal", "Tamil Nadu", 0),
+  ("field@cbe.ac.in", hash_password(AUTH_PASSWORD), "field_officer", "Coimbatore", "Tamil Nadu", 0),
+  # Citizen Accounts (Demo & Synthetic Landowners)
+  ("citizen@cbe.ac.in", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
+  ("citizen@demo.in", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
+  ("citizen.demo.syn001@example.com", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
+  ("citizen.demo.syn002@example.com", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
+  ("citizen.demo.syn003@example.com", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
+  ("citizen.demo.syn004@example.com", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
+  ("citizen.demo.syn005@example.com", hash_password(AUTH_PASSWORD), "citizen", "Coimbatore", "Tamil Nadu", 0),
  ]
  for email, pwd_hash, role, dist, state_sc, is_auth in accounts:
   u_row = c.execute("SELECT id FROM users WHERE lower(email)=lower(?)", (email,)).fetchone()
   if not u_row:
    c.execute("INSERT INTO users(email, password_hash, role, district_scope, state_scope, active, is_authority) VALUES(?,?,?,?,?,1,?)", (email, pwd_hash, role, dist, state_sc, is_auth))
   else:
-   c.execute("UPDATE users SET role=?, district_scope=?, state_scope=?, is_authority=?, active=1 WHERE lower(email)=lower(?)", (role, dist, state_sc, is_auth, email))
+   c.execute("UPDATE users SET password_hash=?, role=?, district_scope=?, state_scope=?, is_authority=?, active=1 WHERE lower(email)=lower(?)", (pwd_hash, role, dist, state_sc, is_auth, email))
 
- # Ensure existing Coimbatore demo accounts keep working with district_scope='Coimbatore' and state_scope='Tamil Nadu'
+ # Ensure demo accounts are verified with district and state scopes
  c.execute("UPDATE users SET district_scope='Coimbatore', state_scope='Tamil Nadu' WHERE lower(email) IN ('district@cbe.ac.in', 'field@cbe.ac.in', 'citizen@cbe.ac.in')")
 
  try:
