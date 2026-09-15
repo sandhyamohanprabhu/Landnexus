@@ -1519,7 +1519,7 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
     """
     Generate an official government Multilingual Land Record OCR Intelligence Dossier.
     Includes document metadata, detected language/script, extraction confidence metrics,
-    verification status, audit trail, and Purpose-Aware privacy masking.
+    raw OCR text, parcel matching intelligence, and Purpose-Aware compliance.
     """
     c = db_conn
     d_row = c.execute("SELECT * FROM documents WHERE document_id=?", (document_id,)).fetchone()
@@ -1527,8 +1527,17 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
         raise ValueError("Document not found")
     d = dict(d_row)
 
-    extractions = c.execute("SELECT * FROM ocr_extractions WHERE document_id=?", (document_id,)).fetchall()
-    extractions = [dict(e) for e in extractions]
+    extractions = [dict(e) for e in c.execute("SELECT * FROM ocr_extractions WHERE document_id=?", (document_id,)).fetchall()]
+
+    # Extract raw text
+    raw_ocr_text = d.get("raw_ocr_text") or ""
+    field_extractions = []
+    for e in extractions:
+        if e["field_name"] == "raw_text":
+            if not raw_ocr_text:
+                raw_ocr_text = e["value"]
+        else:
+            field_extractions.append(e)
 
     # Check parcel if linked
     parcel = None
@@ -1537,13 +1546,27 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
         if p_row:
             parcel = dict(p_row)
 
+    # Compute parcel matching intelligence
+    from backend.services.ocr_service import match_parcel_to_document
+    flat_ext = {e["field_name"]: (e.get("corrected_value") or e.get("value") or "") for e in field_extractions}
+    match_info = match_parcel_to_document(flat_ext, original_parcel_id=d["parcel_id"], project_id=d["project_id"])
+
     ss = _styles()
     elements = []
 
     # Title & Metadata Banner
     elements.append(Paragraph(f"Official Land Record OCR Dossier: {d['document_name']}", ss['SectionTitle']))
     elements.append(Paragraph(f"Document ID: {document_id} | Security Classification: OFFICIAL LAND RECORD", ss['SubSection']))
-    elements.append(Spacer(1, 10))
+    elements.append(Spacer(1, 6))
+
+    # Engine and Mode
+    engine_str = d.get("ocr_engine", "Tesseract Multilingual Engine")
+    is_synthetic = "DEMO" in engine_str.upper() or "SYNTHETIC" in engine_str.upper()
+    ocr_mode_label = "Synthetic OCR / Demo Mode" if is_synthetic else "Real Engine OCR"
+
+    if is_synthetic:
+        elements.append(Paragraph("<b>NOTE:</b> <i>This dossier was generated in Demo/Synthetic Mode (Host OCR engine unavailable). Output is deterministic synthetic data.</i>", ss['BodySmall']))
+        elements.append(Spacer(1, 6))
 
     # Document Overview Block
     lang_name = d.get("language", "en").upper()
@@ -1558,7 +1581,7 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
         ("Parcel Reference ID", _safe(parcel.get("record_id", f"PARCEL-{d['parcel_id']}") if parcel else "Unlinked")),
         ("Detected Language", f"{lang_name} ({lang_conf}% confidence)"),
         ("OCR Processing Mode", _safe(d.get("processing_mode", "auto")).title()),
-        ("OCR Engine Used", _safe(d.get("ocr_engine", "Tesseract Multilingual Engine"))),
+        ("OCR Engine & Mode", f"{engine_str} ({ocr_mode_label})"),
         ("Overall Confidence", f"{ocr_conf}%"),
         ("Verification Status", _safe(d.get("verification_status", "Pending"))),
         ("Duplicate Status", dup_text),
@@ -1566,16 +1589,16 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
         ("Upload Timestamp", _safe(d.get("created_at", "N/A"))[:19]),
     ]
     elements.extend(_kv_block(doc_info, ss))
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
-    # Section 2: Multilingual Extracted Fields
+    # Section 1: Multilingual Extracted Fields
     elements.append(Paragraph("1. Normalized Multilingual Land Record Extractions", ss['SectionTitle']))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_PRIMARY, spaceAfter=6))
 
-    if extractions:
+    if field_extractions:
         ext_headers = ["Field Name", "Extracted Value", "Confidence", "Validation Status", "Human Verified"]
         ext_data = []
-        for e in extractions:
+        for e in field_extractions:
             conf_val = round(float(e.get("confidence", 1.0) or 1.0) * 100, 1)
             verified_label = "YES (Officer Confirmed)" if e.get("human_verified") else "NO (AI Extraction)"
             val_text = _safe(e.get("corrected_value") or e.get("value") or "-")
@@ -1590,10 +1613,62 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
     else:
         elements.append(Paragraph("No structured OCR extractions available for this document.", ss['BodySmall']))
 
-    elements.append(Spacer(1, 14))
+    elements.append(Spacer(1, 10))
 
-    # Section 3: Active Learning & Retraining Audit
-    elements.append(Paragraph("2. Active Learning Feedback & Corrections Ledger", ss['SectionTitle']))
+    # Section 2: Parcel Matching & Verification Intelligence
+    elements.append(Paragraph("2. Land Record & Parcel Matching Intelligence", ss['SectionTitle']))
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_PRIMARY, spaceAfter=6))
+
+    match_status = match_info.get("status", "NO MATCH")
+    matching_basis = match_info.get("matching_basis", "No matching parcel found")
+    matched_p = match_info.get("matched_parcel") or {}
+
+    match_pairs = [
+        ("Matching Status", match_status),
+        ("Matching Basis", matching_basis),
+        ("Matched Parcel ID", _safe(match_info.get("parcel_record_id") or match_info.get("parcel_id") or "None")),
+        ("Survey Number", _safe(matched_p.get("survey_no") or flat_ext.get("survey_number"))),
+        ("Owner / Pattadar", _safe(matched_p.get("owner_name") or flat_ext.get("owner_name"))),
+        ("Village / Taluk", f"{_safe(matched_p.get('village') or flat_ext.get('village'))} / {_safe(matched_p.get('taluk') or flat_ext.get('taluk'))}"),
+        ("District", _safe(matched_p.get("district") or flat_ext.get("district"))),
+    ]
+    elements.extend(_kv_block(match_pairs, ss))
+    elements.append(Spacer(1, 10))
+
+    # Section 3: Raw Extracted OCR Text
+    elements.append(Paragraph("3. Full Raw Extracted OCR Text", ss['SectionTitle']))
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_PRIMARY, spaceAfter=6))
+
+    if raw_ocr_text and raw_ocr_text.strip():
+        # Display in code-like bounded box
+        raw_lines = raw_ocr_text.strip().split("\n")
+        formatted_raw = "<br/>".join(line.replace(" ", "&nbsp;") for line in raw_lines[:35])
+        if len(raw_lines) > 35:
+            formatted_raw += f"<br/><i>... and {len(raw_lines)-35} more lines</i>"
+        raw_style = ParagraphStyle(
+            "RawBox", parent=ss["BodyText"],
+            fontSize=8, leading=11, fontName="Helvetica",
+            textColor=HexColor("#1e293b")
+        )
+        elements.append(Table(
+            [[Paragraph(formatted_raw, raw_style)]],
+            colWidths=[530],
+            style=[
+                ('BACKGROUND', (0, 0), (-1, -1), HexColor("#f8fafc")),
+                ('BOX', (0, 0), (-1, -1), 0.5, HexColor("#cbd5e1")),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ]
+        ))
+    else:
+        elements.append(Paragraph("Raw OCR text not available or processing not yet executed.", ss['BodySmall']))
+
+    elements.append(Spacer(1, 10))
+
+    # Section 4: Active Learning & Retraining Audit
+    elements.append(Paragraph("4. Active Learning Feedback & Corrections Ledger", ss['SectionTitle']))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_PRIMARY, spaceAfter=6))
 
     learn_rows = c.execute("SELECT * FROM ocr_learning_records WHERE document_id=? ORDER BY id DESC LIMIT 10", (document_id,)).fetchall()
@@ -1614,10 +1689,10 @@ def generate_multilingual_ocr_report(db_conn, document_id: str, user_info: dict 
     else:
         elements.append(Paragraph("No human corrections recorded for this document (AI extractions accepted or pending review).", ss['BodySmall']))
 
-    elements.append(Spacer(1, 14))
+    elements.append(Spacer(1, 10))
 
-    # Section 4: Privacy & Compliance Verification
-    elements.append(Paragraph("3. Statutory Compliance & Purpose-Aware Redaction Certification", ss['SectionTitle']))
+    # Section 5: Privacy & Compliance Verification
+    elements.append(Paragraph("5. Statutory Compliance & Purpose-Aware Redaction Certification", ss['SectionTitle']))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=BRAND_PRIMARY, spaceAfter=6))
 
     actor_email = user_info.get("email", "officer@tngov.in") if user_info else "officer@tngov.in"

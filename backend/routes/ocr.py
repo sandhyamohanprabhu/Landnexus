@@ -47,15 +47,16 @@ def process(document_id: str, payload: dict = Body(default={}), authorization: s
     file_path = d["path"]
     
     # Process Multilingual OCR
-    result = process_document_for_ocr(file_path, language=language, mode=mode)
+    from backend.services.ocr_service import match_parcel_to_document
+    result = process_document_for_ocr(file_path, language=language, mode=mode, parcel_id=d["parcel_id"], project_id=d["project_id"])
     
     if not result["success"]:
-        c.execute("UPDATE documents SET ocr_status='Failed', remarks=? WHERE document_id=?", (result["message"], document_id))
+        c.execute("UPDATE documents SET ocr_status='Failed', remarks=? WHERE document_id=?", (result.get("message", "OCR failed"), document_id))
         c.commit()
         c.close()
         if result.get("error_code") == "HANDWRITTEN_MODEL_UNAVAILABLE":
             raise HTTPException(400, result["message"])
-        raise HTTPException(500, f"OCR failed: {result['message']}")
+        raise HTTPException(500, f"OCR failed: {result.get('message', 'Processing error')}")
         
     det_lang = result.get("language", "en")
     lang_conf = result.get("language_confidence", 1.0)
@@ -64,12 +65,18 @@ def process(document_id: str, payload: dict = Body(default={}), authorization: s
     proc_path = result.get("preprocessed_image")
     dup_flag = 1 if result.get("duplicate_detection", {}).get("is_duplicate") else 0
     overall_status = result.get("ocr_status", "Verification Required")
+    raw_text = result.get("raw_text", "")
+    ocr_mode = result.get("ocr_mode", "real")
+    is_mock = result.get("is_mock_fallback", False)
+    pages_cnt = result.get("pages_processed", 1)
+    match_data = result.get("match", {})
 
     c.execute("""
         UPDATE documents 
-        SET ocr_status=?, ocr_confidence=?, remarks=?, language=?, language_confidence=?, ocr_engine=?, processing_mode=?, processed_path=?, duplicate_flag=?
+        SET ocr_status=?, ocr_confidence=?, remarks=?, language=?, language_confidence=?, 
+            ocr_engine=?, processing_mode=?, processed_path=?, duplicate_flag=?, raw_ocr_text=?
         WHERE document_id=?
-    """, (overall_status, result.get("confidence", 0.0), result.get("message", ""), det_lang, lang_conf, ocr_engine, proc_mode, proc_path, dup_flag, document_id))
+    """, (overall_status, result.get("confidence", 0.0), result.get("message", ""), det_lang, lang_conf, ocr_engine, proc_mode, proc_path, dup_flag, raw_text, document_id))
               
     # Delete old extractions for this document if re-running
     c.execute("DELETE FROM ocr_extractions WHERE document_id=?", (document_id,))
@@ -85,25 +92,36 @@ def process(document_id: str, payload: dict = Body(default={}), authorization: s
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (document_id, field_name, value, value, f_conf, f_conf, f_uncert, 'Pending'))
                       
+    if raw_text:
+        c.execute("""
+            INSERT INTO ocr_extractions (document_id, field_name, value, original_value, confidence, field_confidence, uncertainty_label, validation_status)
+            VALUES (?, 'raw_text', ?, ?, 1.0, 1.0, 'Raw OCR Output', 'Extracted')
+        """, (document_id, raw_text, raw_text))
+
     c.commit()
     c.close()
     
     audit(u["email"], "OCR_PROCESS", "documents", document_id, f"Language={det_lang} | Engine={ocr_engine} | Mode={proc_mode}", overall_status, "success")
     
     return {
+        "success": True,
         "document_id": document_id,
         "ocr_status": overall_status,
+        "ocr_mode": ocr_mode,
+        "is_mock_fallback": is_mock,
         "human_verification_required": True,
+        "raw_text": raw_text,
+        "pages_processed": pages_cnt,
         "language": det_lang,
         "language_name": result.get("language_name", "English"),
         "script": result.get("script", "Latin"),
         "language_confidence": lang_conf,
         "ocr_engine": ocr_engine,
         "processing_mode": proc_mode,
-        "is_mock_fallback": result.get("is_mock_fallback", False),
         "preprocessed_image": proc_path,
         "extractions": extracted,
         "detailed_extractions": detailed,
+        "match": match_data,
         "duplicate_detection": result.get("duplicate_detection"),
         "message": result.get("message", "Multilingual OCR processing complete")
     }
@@ -211,10 +229,29 @@ def get_ocr_details(document_id: str, authorization: str = Header(None)):
     if d["district"]:
         check_resource_district(u, d["district"], "Document OCR Record")
 
-    extractions = c.execute("SELECT * FROM ocr_extractions WHERE document_id=?", (document_id,)).fetchall()
+    extractions = [dict(e) for e in c.execute("SELECT * FROM ocr_extractions WHERE document_id=?", (document_id,)).fetchall()]
     c.close()
     
+    # Compute flat extractions and parcel match
+    d_dict = dict(d)
+    flat_ext = {}
+    raw_ocr = d_dict.get("raw_ocr_text") or ""
+    for e in extractions:
+        if e["field_name"] == "raw_text":
+            if not raw_ocr:
+                raw_ocr = e["value"]
+        else:
+            flat_ext[e["field_name"]] = e.get("corrected_value") or e.get("value") or ""
+            
+    from backend.services.ocr_service import match_parcel_to_document
+    match_data = match_parcel_to_document(flat_ext, original_parcel_id=d["parcel_id"], project_id=d["project_id"])
+    
+    engine_str = d["ocr_engine"] or "Tesseract OCR"
+    is_mock = "DEMO" in engine_str.upper() or "SYNTHETIC" in engine_str.upper()
+    ocr_mode = "synthetic" if is_mock else "real"
+    
     return {
+        "success": True,
         "document_id": document_id,
         "document_name": d["document_name"],
         "project_id": d["project_id"],
@@ -228,17 +265,21 @@ def get_ocr_details(document_id: str, authorization: str = Header(None)):
         "area": d["area"],
         "parcel_record_id": d["parcel_record_id"],
         "ocr_status": d["ocr_status"],
+        "ocr_mode": ocr_mode,
+        "is_mock_fallback": is_mock,
         "verification_status": d["verification_status"],
         "ocr_confidence": d["ocr_confidence"],
+        "raw_text": raw_ocr,
         "language": d["language"] or "en",
         "language_confidence": d["language_confidence"] or 1.0,
-        "ocr_engine": d["ocr_engine"] or "Tesseract OCR",
+        "ocr_engine": engine_str,
         "processing_mode": d["processing_mode"] or "auto",
         "preprocessed_image": d["processed_path"],
         "duplicate_flag": bool(d["duplicate_flag"]),
         "rejection_reason": d["rejection_reason"],
         "remarks": d["remarks"],
-        "extractions": [dict(e) for e in extractions]
+        "match": match_data,
+        "extractions": [e for e in extractions if e["field_name"] != "raw_text"]
     }
 
 @router.post("/{document_id}/verify")

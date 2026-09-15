@@ -460,6 +460,8 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
   const [rejectReason, setRejectReason] = useState("");
   const [previewVersion, setPreviewVersion] = useState("original"); // "original" | "preprocessed"
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [activeSubTab, setActiveSubTab] = useState("fields"); // "fields" | "raw_text" | "match"
+  const [copiedText, setCopiedText] = useState(false);
 
   useEffect(() => {
     if (ocrData?.extractions) {
@@ -472,7 +474,7 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
   }, [ocrData]);
 
   if (error) return <div className="error">Error loading OCR details: {error.message}</div>;
-  if (!ocrData) return <div>Loading OCR details...</div>;
+  if (!ocrData) return <div style={{ padding: "24px", textAlign: "center", color: "#64748b" }}>⏳ Loading OCR extraction and parcel matching details...</div>;
 
   const handleVerify = async () => {
     try {
@@ -531,24 +533,52 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
     }
   };
 
+  const copyRawText = () => {
+    if (ocrData?.raw_text) {
+      navigator.clipboard.writeText(ocrData.raw_text);
+      setCopiedText(true);
+      setTimeout(() => setCopiedText(false), 2000);
+    }
+  };
+
   const canVerify = ["authority", "admin", "acquisition_officer", "district_authority", "state_authority", "field_officer", "national_authority"].includes(user?.role);
   const isVerified = ocrData.ocr_status === "Verified";
   const isRejected = ocrData.ocr_status === "Rejected";
+  const isSynthetic = ocrData.ocr_mode === "synthetic" || ocrData.is_mock_fallback;
+  const match = ocrData.match || null;
 
   return (
     <div style={{ background: "#ffffff", padding: "16px", borderRadius: "8px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
       {/* Header Banner */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px", marginBottom: "14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px", marginBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
         <div>
-          <h3 style={{ margin: 0, color: "#0f172a", fontSize: "16px" }}>
-            📄 Multilingual Land Record OCR & Human Verification
+          <h3 style={{ margin: 0, color: "#0f172a", fontSize: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+            📄 Multilingual Land Record OCR & Verification
+            {isSynthetic ? (
+              <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "12px", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }}>
+                DEMO / SYNTHETIC OCR
+              </span>
+            ) : (
+              <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "12px", background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" }}>
+                🟢 REAL OCR EXTRACTION
+              </span>
+            )}
           </h3>
           <div style={{ fontSize: "11px", color: "#64748b", marginTop: "3px" }}>
-            Document: <b>{ocrData.document_name}</b> | Lang: <b>{ocrData.language?.toUpperCase() || "EN"}</b> ({Math.round((ocrData.language_confidence || 1.0) * 100)}%) | Engine: <b>{ocrData.ocr_engine}</b>
+            Doc: <b>{ocrData.document_name}</b> | Lang: <b>{ocrData.language?.toUpperCase() || "EN"}</b> ({Math.round((ocrData.language_confidence || 1.0) * 100)}%) | Engine: <b>{ocrData.ocr_engine}</b> {ocrData.pages_processed ? `(${ocrData.pages_processed} pg)` : ""}
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          {onReRun && (
+            <button
+              type="button"
+              onClick={() => onReRun(selectedLanguage, processingMode)}
+              style={{ background: "#0f766e", color: "#fff", border: "none", padding: "6px 12px", borderRadius: "4px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}
+            >
+              ▶️ Run OCR
+            </button>
+          )}
           <button
             type="button"
             onClick={handleDownloadPdf}
@@ -594,6 +624,12 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
           </span>
         </div>
         <div>
+          <b>OCR Mode:</b>{" "}
+          <span style={{ fontWeight: 700, color: isSynthetic ? "#b45309" : "#166534" }}>
+            {isSynthetic ? "Synthetic / Demo Fallback" : "Real OCR Pipeline"}
+          </span>
+        </div>
+        <div>
           <b>Processing Mode:</b> <span style={{ textTransform: "capitalize" }}>{ocrData.processing_mode || "auto"}</span>
         </div>
         {ocrData.rejection_reason && (
@@ -602,6 +638,46 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
           </div>
         )}
       </div>
+
+      {/* Parcel Database Match Intelligence Ribbon */}
+      {match && (
+        <div style={{
+          background: match.status === "MATCHED" ? "#f0fdf4" : match.status === "PARTIAL MATCH" ? "#fffbeb" : "#f8fafc",
+          border: `1px solid ${match.status === "MATCHED" ? "#bbf7d0" : match.status === "PARTIAL MATCH" ? "#fde68a" : "#e2e8f0"}`,
+          borderRadius: "6px",
+          padding: "10px 14px",
+          marginBottom: "14px",
+          fontSize: "12px"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px", flexWrap: "wrap", gap: "6px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "14px" }}>
+                {match.status === "MATCHED" ? "🎯" : match.status === "PARTIAL MATCH" ? "🔍" : "❓"}
+              </span>
+              <span style={{ fontWeight: 800, color: match.status === "MATCHED" ? "#166534" : match.status === "PARTIAL MATCH" ? "#92400e" : "#475569" }}>
+                PARCEL DATABASE STATUS: {match.status} ({Math.round(match.confidence * 100)}% Confidence)
+              </span>
+            </div>
+            {match.parcel_id && (
+              <span style={{ fontSize: "11px", background: "#e2e8f0", padding: "2px 8px", borderRadius: "4px", fontWeight: 700, color: "#334155" }}>
+                Parcel ID: {match.parcel_id}
+              </span>
+            )}
+          </div>
+          <div style={{ color: "#334155", fontSize: "11px", marginBottom: "6px" }}>
+            <b>Basis:</b> {match.explanation || match.basis}
+          </div>
+          {match.parcel_id && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "8px", background: "#ffffff", padding: "8px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "11px" }}>
+              <div><span style={{ color: "#64748b" }}>Matched Survey No:</span> <b>{match.survey_no || "N/A"}</b></div>
+              <div><span style={{ color: "#64748b" }}>Matched Owner:</span> <b>{match.owner_name || "N/A"}</b></div>
+              <div><span style={{ color: "#64748b" }}>Village / Taluk:</span> <b>{match.village || "N/A"}</b></div>
+              <div><span style={{ color: "#64748b" }}>District:</span> <b>{match.district || "N/A"}</b></div>
+              {match.area_acres && <div><span style={{ color: "#64748b" }}>Area:</span> <b>{match.area_acres} Acres</b></div>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Linked Parcel & Land Metadata Ribbon */}
       {(ocrData.survey_no || ocrData.owner_name || ocrData.village || ocrData.parcel_id) && (
@@ -690,13 +766,45 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
           </div>
         </div>
 
-        {/* Right Side: Structured Fields, Confidences & Correction Inputs */}
+        {/* Right Side: Tab Switcher between Structured Fields & Raw OCR Text */}
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "6px", padding: "12px", background: "#ffffff", display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-            <div style={{ fontSize: "12px", fontWeight: 700, color: "#334155" }}>
-              📋 Extracted Land Record Fields
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "6px" }}>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                type="button"
+                onClick={() => setActiveSubTab("fields")}
+                style={{
+                  padding: "4px 10px",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  borderRadius: "4px",
+                  border: "1px solid #cbd5e1",
+                  background: activeSubTab === "fields" ? "#0f6c70" : "#f1f5f9",
+                  color: activeSubTab === "fields" ? "#fff" : "#475569",
+                  cursor: "pointer"
+                }}
+              >
+                📋 Structured Fields
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSubTab("raw_text")}
+                style={{
+                  padding: "4px 10px",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  borderRadius: "4px",
+                  border: "1px solid #cbd5e1",
+                  background: activeSubTab === "raw_text" ? "#0f6c70" : "#f1f5f9",
+                  color: activeSubTab === "raw_text" ? "#fff" : "#475569",
+                  cursor: "pointer"
+                }}
+              >
+                📝 Raw Extracted Text
+              </button>
             </div>
-            {!isVerified && !isRejected && canVerify && (
+
+            {activeSubTab === "fields" && !isVerified && !isRejected && canVerify && (
               <button
                 type="button"
                 onClick={() => setEditing(!editing)}
@@ -705,46 +813,80 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
                 {editing ? "Cancel Editing" : "✏️ Edit Fields"}
               </button>
             )}
+
+            {activeSubTab === "raw_text" && (
+              <button
+                type="button"
+                onClick={copyRawText}
+                style={{ padding: "4px 8px", fontSize: "11px", borderRadius: "4px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f6c70", fontWeight: 700, cursor: "pointer" }}
+              >
+                {copiedText ? "✓ Copied!" : "📋 Copy Raw Text"}
+              </button>
+            )}
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", maxHeight: "350px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", paddingRight: "4px" }}>
-            {Object.entries(fields).map(([key, val]) => {
-              const extItem = ocrData.extractions?.find(e => e.field_name === key);
-              const conf = extItem?.confidence ?? extItem?.field_confidence ?? 0.85;
-              const isLowConf = conf < 0.75 || !val;
+          {activeSubTab === "fields" && (
+            <div style={{ flex: 1, overflowY: "auto", maxHeight: "350px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", paddingRight: "4px" }}>
+              {Object.entries(fields).map(([key, val]) => {
+                const extItem = ocrData.extractions?.find(e => e.field_name === key);
+                const conf = extItem?.confidence ?? extItem?.field_confidence ?? 0.85;
+                const isLowConf = conf < 0.75 || !val;
 
-              return (
-                <div key={key} style={{ background: isLowConf ? "#fffbeb" : "#f8fafc", padding: "8px", borderRadius: "4px", border: `1px solid ${isLowConf ? "#fef3c7" : "#e2e8f0"}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                    <label style={{ fontSize: "10px", fontWeight: 700, color: isLowConf ? "#b45309" : "#64748b" }}>
-                      {key.replace("_", " ").toUpperCase()}
-                    </label>
-                    <span style={{ fontSize: "9px", fontWeight: 700, color: isLowConf ? "#d97706" : "#16a34a" }}>
-                      {val ? `${Math.round(conf * 100)}%` : "MISSING"}
-                    </span>
+                return (
+                  <div key={key} style={{ background: isLowConf ? "#fffbeb" : "#f8fafc", padding: "8px", borderRadius: "4px", border: `1px solid ${isLowConf ? "#fef3c7" : "#e2e8f0"}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                      <label style={{ fontSize: "10px", fontWeight: 700, color: isLowConf ? "#b45309" : "#64748b" }}>
+                        {key.replace("_", " ").toUpperCase()}
+                      </label>
+                      <span style={{ fontSize: "9px", fontWeight: 700, color: isLowConf ? "#d97706" : "#16a34a" }}>
+                        {val ? `${Math.round(conf * 100)}%` : "MISSING"}
+                      </span>
+                    </div>
+
+                    {editing ? (
+                      <input
+                        style={{ width: "100%", padding: "5px 7px", fontSize: "12px", borderRadius: "4px", border: "1px solid #cbd5e1", boxSizing: "border-box" }}
+                        value={val || ""}
+                        onChange={e => setFields({ ...fields, [key]: e.target.value })}
+                      />
+                    ) : (
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: val ? "#0f172a" : "#94a3b8", minHeight: "22px", wordBreak: "break-all" }}>
+                        {val || "—"}
+                      </div>
+                    )}
+
+                    {isLowConf && (
+                      <div style={{ fontSize: "9px", color: "#b45309", marginTop: "3px", display: "flex", alignItems: "center", gap: "3px" }}>
+                        <span>⚠️</span> Verification Required
+                      </div>
+                    )}
                   </div>
+                );
+              })}
+            </div>
+          )}
 
-                  {editing ? (
-                    <input
-                      style={{ width: "100%", padding: "5px 7px", fontSize: "12px", borderRadius: "4px", border: "1px solid #cbd5e1", boxSizing: "border-box" }}
-                      value={val || ""}
-                      onChange={e => setFields({ ...fields, [key]: e.target.value })}
-                    />
-                  ) : (
-                    <div style={{ fontSize: "12px", fontWeight: 600, color: val ? "#0f172a" : "#94a3b8", minHeight: "22px", wordBreak: "break-all" }}>
-                      {val || "—"}
-                    </div>
-                  )}
-
-                  {isLowConf && (
-                    <div style={{ fontSize: "9px", color: "#b45309", marginTop: "3px", display: "flex", alignItems: "center", gap: "3px" }}>
-                      <span>⚠️</span> Verification Required
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          {activeSubTab === "raw_text" && (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+              <pre style={{
+                flex: 1,
+                maxHeight: "350px",
+                overflowY: "auto",
+                background: "#0f172a",
+                color: "#e2e8f0",
+                padding: "12px",
+                borderRadius: "4px",
+                fontSize: "11px",
+                lineHeight: "1.5",
+                whiteSpace: "pre-wrap",
+                fontFamily: "Consolas, Monaco, 'Courier New', monospace",
+                margin: 0,
+                border: "1px solid #334155"
+              }}>
+                {ocrData.raw_text || "No raw OCR text extracted yet. Click 'Run OCR' to process the document."}
+              </pre>
+            </div>
+          )}
 
           {/* Notes and Verification Action Bar */}
           {canVerify && !isVerified && (

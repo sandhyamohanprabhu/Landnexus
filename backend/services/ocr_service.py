@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import numpy as np
@@ -13,6 +14,11 @@ try:
     from pdf2image import convert_from_path
 except ImportError:
     convert_from_path = None
+
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 from backend.core import conn, UPLOADS, ROOT
 
@@ -33,7 +39,7 @@ SUPPORTED_LANGUAGES = {
 
 SCRIPT_UNICODE_RANGES = [
     ("Tamil", 0x0B80, 0x0BFF, "ta"),
-    ("Devanagari", 0x0900, 0x097F, "hi"),  # Or Marathi if specific vocabulary
+    ("Devanagari", 0x0900, 0x097F, "hi"),
     ("Telugu", 0x0C00, 0x0C7F, "te"),
     ("Kannada", 0x0C80, 0x0CFF, "kn"),
     ("Malayalam", 0x0D00, 0x0D7F, "ml"),
@@ -43,15 +49,13 @@ SCRIPT_UNICODE_RANGES = [
     ("Latin", 0x0041, 0x007A, "en"),
 ]
 
-# Marathi vocabulary markers to distinguish Devanagari Hindi vs Marathi
 MARATHI_KEYWORDS = ["गट", "सर्व्हे", "जमीन", "गाव", "तालुका", "जिल्हा", "खातेदार", "क्षेत्र", "क्षेत्रफळ", "सातबारा", "७/१२", "फेरफार"]
 
-# Normalized mandatory and standard land record fields
 MANDATORY_FIELDS = ["survey_number", "owner_name", "village", "taluk", "district"]
 
 MULTILINGUAL_PATTERNS = {
     "survey_number": [
-        r'(?:Survey\s*(?:No|Number|\.No)|S\.No|Sy\.No|Plot\s*No|Gat\s*No)[\s.:#-]*([0-9A-Za-z/_\-]+)',
+        r'(?:Survey\s*(?:No|Number|\.No|#)|S\.No|Sy\.No|Plot\s*No|Gat\s*No)[\s.:#-]*([0-9A-Za-z/_\-]+)',
         r'(?:புல\s*எண்|சர்வே\s*எண்|க/எண்)[\s.:#-]*([0-9A-Za-z/_\-]+)',
         r'(?:खसरा\s*(?:नं|नंबर)?|सर्वे\s*(?:नं|नंबर)?|प्लॉट\s*(?:नं|नंबर)?)[\s.:#-]*([0-9A-Za-z/_\-]+)',
         r'(?:सर्व्हे\s*(?:नं|नंबर)?|गट\s*(?:नं|नंबर)?)[\s.:#-]*([0-9A-Za-z/_\-]+)',
@@ -61,6 +65,11 @@ MULTILINGUAL_PATTERNS = {
         r'(?:দাগ\s*নং)[\s.:#-]*([0-9A-Za-z/_\-]+)',
         r'(?:સર્વે\s*નં)[\s.:#-]*([0-9A-Za-z/_\-]+)',
         r'(?:ਖਸਰਾ\s*ਨੰ)[\s.:#-]*([0-9A-Za-z/_\-]+)',
+    ],
+    "subdivision_number": [
+        r'(?:Sub-?\s*Division\s*(?:No|Number)|Subdiv|Sub-?\s*Div)[\s.:#-]*([0-9A-Za-z/_\-]+)',
+        r'(?:உட்பிரிவு\s*எண்|உட்பிரிவு)[\s.:#-]*([0-9A-Za-z/_\-]+)',
+        r'(?:उप-?\s*विभाग|उप\s*प्रभाग)[\s.:#-]*([0-9A-Za-z/_\-]+)',
     ],
     "khasra_khata": [
         r'(?:Khasra\s*(?:No|Number)|Khata\s*(?:No|Number)|Khatauni)[\s.:#-]*([0-9A-Za-z/_\-]+)',
@@ -75,19 +84,19 @@ MULTILINGUAL_PATTERNS = {
         r'(?:ਖਾਤਾ\s*ਨੰ)[\s.:#-]*([0-9A-Za-z/_\-]+)',
     ],
     "owner_name": [
-        r'(?:Owner\s*Name|Owner|Pattadar|Holder|Landowner|Applicant|Name\s*of\s*Owner)[\s.:-]*([A-Za-z\s\u0900-\u0D7F]+)',
-        r'(?:உரிமையாளர்\s*(?:பெயர்)?|பட்டாதாரர்\s*(?:பெயர்)?|பெயர்)[\s.:-]*([A-Za-z\s\u0B80-\u0BFF]+)',
-        r'(?:भूमिधर\s*(?:का\s*नाम)?|खातेदार\s*(?:का\s*नाम)?|मालिक\s*(?:का\s*नाम)?|नाम)[\s.:-]*([A-Za-z\s\u0900-\u097F]+)',
-        r'(?:खातेदाराचे\s*नाव|जमीन\s*मालक|भोगवटादार)[\s.:-]*([A-Za-z\s\u0900-\u097F]+)',
-        r'(?:పట్టాదారుని\s*పేరు|భూమి\s*యజమాని)[\s.:-]*([A-Za-z\s\u0C00-\u0C7F]+)',
-        r'(?:ಖಾತೆದಾರರ\s*ಹೆಸರು|ಮಾಲೀಕರ\s*ಹೆಸರು)[\s.:-]*([A-Za-z\s\u0C80-\u0CFF]+)',
-        r'(?:ഉടമസ്ഥന്റെ\s*പേര്|കൈവശക്കാരൻ)[\s.:-]*([A-Za-z\s\u0D00-\u0D7F]+)',
-        r'(?:মালিকের\s*নাম|রায়তের\s*নাম)[\s.:-]*([A-Za-z\s\u0980-\u09FF]+)',
-        r'(?:ખાતેદારનું\s*નામ|જમીન\s*માલિક)[\s.:-]*([A-Za-z\s\u0A80-\u0AFF]+)',
-        r'(?:ਮਾਲਕ\s*ਦਾ\s*ਨਾਮ|ਕਾਸ਼ਤਕਾਰ)[\s.:-]*([A-Za-z\s\u0A00-\u0A7F]+)',
+        r'(?:Owner\s*Name|Owner|Pattadar|Holder|Landowner|Applicant|Name\s*of\s*(?:Owner|Pattadar|Applicant))[\s.:-]*([A-Za-z\s\u0900-\u0D7F.]+)',
+        r'(?:உரிமையாளர்\s*(?:பெயர்)?|பட்டாதாரர்\s*(?:பெயர்)?|பெயர்)[\s.:-]*([A-Za-z\s\u0B80-\u0BFF.]+)',
+        r'(?:भूमिधर\s*(?:का\s*नाम)?|खातेदार\s*(?:का\s*नाम)?|मालिक\s*(?:का\s*नाम)?|नाम)[\s.:-]*([A-Za-z\s\u0900-\u097F.]+)',
+        r'(?:खातेदाराचे\s*नाव|जमीन\s*मालक|भोगवटादार)[\s.:-]*([A-Za-z\s\u0900-\u097F.]+)',
+        r'(?:పట్టాదారుని\s*పేరు|భూమి\s*యజమాని)[\s.:-]*([A-Za-z\s\u0C00-\u0C7F.]+)',
+        r'(?:ಖಾತೆದಾರರ\s*ಹೆಸರು|ಮಾಲೀಕರ\s*ಹೆಸರು)[\s.:-]*([A-Za-z\s\u0C80-\u0CFF.]+)',
+        r'(?:ഉടമസ്ഥന്റെ\s*പേര്|കൈവശക്കാരൻ)[\s.:-]*([A-Za-z\s\u0D00-\u0D7F.]+)',
+        r'(?:মালিকের\s*নাম|রায়তের\s*নাম)[\s.:-]*([A-Za-z\s\u0980-\u09FF.]+)',
+        r'(?:ખાતેદારનું\s*નામ|જમીન\s*માલિક)[\s.:-]*([A-Za-z\s\u0A80-\u0AFF.]+)',
+        r'(?:ਮਾਲਕ\s*ਦਾ\s*ਨਾਮ|ਕਾਸ਼ਤਕਾਰ)[\s.:-]*([A-Za-z\s\u0A00-\u0A7F.]+)',
     ],
     "land_area": [
-        r'(?:Land\s*Area|Total\s*Area|Area|Extent|Measurement)[\s.:-]*([0-9.]+\s*(?:acres|acre|hectares|hectare|cents|sqft|sq\.ft|bigha|guntha|biswa|sq\.m))',
+        r'(?:Land\s*Area|Total\s*Area|Area|Extent|Measurement)[\s.:-]*([0-9.]+\s*(?:acres|acre|hectares|hectare|cents|sqft|sq\.ft|bigha|guntha|biswa|sq\.m)?)',
         r'(?:நிலப்பரப்பு|விஸ்தீரணம்|பரப்பளவு|ஏக்கர்|சென்ட்)[\s.:-]*([0-9.]+\s*(?:ஏக்கர்|சென்ட்|ஹெக்டேர்|ச\.அடி|acres|cents|hectares)?)',
         r'(?:क्षेत्रफल|रकबा|विस्तार|जमीन\s*का\s*क्षेत्रफल)[\s.:-]*([0-9.]+\s*(?:एकड़|हेक्टेयर|बीघा|बिस्वा|वर्गफुट|acres|hectares)?)',
         r'(?:क्षेत्रफळ|एकूण\s*क्षेत्र)[\s.:-]*([0-9.]+\s*(?:हेक्टर|आर|गुंठा|एकर|acres)?)',
@@ -111,7 +120,7 @@ MULTILINGUAL_PATTERNS = {
         r'(?:ਪਿੰਡ|ਮੌਜ਼ਾ)[\s.:-]*([A-Za-z\s\u0A00-\u0A7F]+)',
     ],
     "taluk": [
-        r'(?:Taluk|Tehsil|Taluka|Mandal|Block|Sub-Division)[\s.:-]*([A-Za-z\s\u0900-\u0D7F]+)',
+        r'(?:Taluk|Tehsil|Taluka|Mandal|Block|Revenue\s*Block)[\s.:-]*([A-Za-z\s\u0900-\u0D7F]+)',
         r'(?:வட்டம்|தாலுகா)[\s.:-]*([A-Za-z\s\u0B80-\u0BFF]+)',
         r'(?:तहसील|तालुका|मंडल)[\s.:-]*([A-Za-z\s\u0900-\u097F]+)',
         r'(?:तालुका)[\s.:-]*([A-Za-z\s\u0900-\u097F]+)',
@@ -165,6 +174,53 @@ MULTILINGUAL_PATTERNS = {
     ],
 }
 
+def get_tesseract_cmd() -> str | None:
+    """Discover Tesseract binary on Windows / Linux or via environment variables."""
+    custom = os.environ.get("TESSERACT_CMD")
+    if custom and os.path.exists(custom):
+        return custom
+
+    found = shutil.which("tesseract")
+    if found:
+        return found
+
+    # Standard Windows install locations
+    win_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%APPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        r"C:\Tesseract-OCR\tesseract.exe",
+        r"C:\tools\tesseract\tesseract.exe",
+    ]
+    for p in win_paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+def get_poppler_path() -> str | None:
+    """Discover Poppler directory on Windows / Linux or via environment variables."""
+    custom = os.environ.get("POPPLER_PATH")
+    if custom and os.path.exists(custom):
+        return custom
+
+    found = shutil.which("pdftoppm")
+    if found:
+        return str(Path(found).parent)
+
+    win_paths = [
+        r"C:\Program Files\poppler\bin",
+        r"C:\Program Files\poppler-24.08.0\Library\bin",
+        r"C:\Program Files (x86)\poppler\bin",
+        r"C:\poppler\bin",
+        os.path.expandvars(r"%LOCALAPPDATA%\poppler\bin"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\poppler\bin"),
+    ]
+    for p in win_paths:
+        if os.path.exists(p):
+            return p
+    return None
+
 def preprocess_image(input_path: Path, output_path: Path = None) -> dict:
     """Assess quality, convert to grayscale, auto-contrast, median denoise, normalize DPI."""
     if not output_path:
@@ -214,7 +270,6 @@ def preprocess_image(input_path: Path, output_path: Path = None) -> dict:
         metrics["quality_assessment"] = f"Preprocessing fallback: {str(e)}"
         try:
             if input_path != output_path:
-                import shutil
                 shutil.copyfile(input_path, output_path)
         except Exception:
             pass
@@ -280,8 +335,125 @@ def detect_script_and_language(text: str) -> dict:
         "char_distribution": {k: round(v / total_alpha, 3) for k, v in script_counts.items()}
     }
 
+def match_parcel_to_document(extracted: dict, original_parcel_id: int = None, project_id: str = None) -> dict:
+    """
+    Match extracted land document fields to real/synthetic parcels in database.
+    Priority:
+    1. Exact parcel ID (if provided)
+    2. Exact Survey No + Village
+    3. Exact Survey No + District
+    4. Unique Survey No
+    5. Owner Name + Village
+    """
+    c = conn()
+    try:
+        if original_parcel_id:
+            p = c.execute("SELECT * FROM parcels WHERE id=?", (original_parcel_id,)).fetchone()
+            if p:
+                pd = dict(p)
+                return {
+                    "status": "MATCHED",
+                    "parcel_id": original_parcel_id,
+                    "parcel_record_id": pd.get("record_id"),
+                    "matching_basis": f"Linked directly via Parcel ID #{original_parcel_id} ({pd.get('survey_no')}, {pd.get('village')})",
+                    "matched_parcel": pd
+                }
+
+        s_no = (extracted.get("survey_number") or "").strip()
+        vill = (extracted.get("village") or "").strip()
+        dist = (extracted.get("district") or "").strip()
+        owner = (extracted.get("owner_name") or "").strip()
+
+        # 1. Exact survey no + village
+        if s_no and vill:
+            p = c.execute("""
+                SELECT * FROM parcels 
+                WHERE LOWER(TRIM(survey_no)) = LOWER(TRIM(?)) 
+                  AND LOWER(TRIM(village)) = LOWER(TRIM(?))
+                LIMIT 1
+            """, (s_no, vill)).fetchone()
+            if p:
+                pd = dict(p)
+                return {
+                    "status": "MATCHED",
+                    "parcel_id": pd["id"],
+                    "parcel_record_id": pd.get("record_id"),
+                    "matching_basis": f"Exact match on Survey Number '{s_no}' and Village '{vill}'",
+                    "matched_parcel": pd
+                }
+
+        # 2. Exact survey no + district
+        if s_no and dist:
+            p = c.execute("""
+                SELECT * FROM parcels 
+                WHERE LOWER(TRIM(survey_no)) = LOWER(TRIM(?)) 
+                  AND LOWER(TRIM(district)) = LOWER(TRIM(?))
+                LIMIT 1
+            """, (s_no, dist)).fetchone()
+            if p:
+                pd = dict(p)
+                return {
+                    "status": "MATCHED",
+                    "parcel_id": pd["id"],
+                    "parcel_record_id": pd.get("record_id"),
+                    "matching_basis": f"Matched on Survey Number '{s_no}' and District '{dist}'",
+                    "matched_parcel": pd
+                }
+
+        # 3. Unique survey no
+        if s_no:
+            matches = [dict(x) for x in c.execute("""
+                SELECT * FROM parcels WHERE LOWER(TRIM(survey_no)) = LOWER(TRIM(?))
+            """, (s_no,)).fetchall()]
+            if len(matches) == 1:
+                pd = matches[0]
+                return {
+                    "status": "MATCHED",
+                    "parcel_id": pd["id"],
+                    "parcel_record_id": pd.get("record_id"),
+                    "matching_basis": f"Matched uniquely on Survey Number '{s_no}' in {pd.get('village', 'N/A')}",
+                    "matched_parcel": pd
+                }
+            elif len(matches) > 1:
+                pd = matches[0]
+                return {
+                    "status": "PARTIAL MATCH",
+                    "parcel_id": pd["id"],
+                    "parcel_record_id": pd.get("record_id"),
+                    "matching_basis": f"Multiple parcels ({len(matches)}) found with Survey Number '{s_no}'. Verified with {pd.get('village')}.",
+                    "matched_parcel": pd
+                }
+
+        # 4. Owner name + Village
+        if owner and vill and len(owner) > 3:
+            p = c.execute("""
+                SELECT * FROM parcels 
+                WHERE LOWER(TRIM(owner_name)) = LOWER(TRIM(?)) 
+                  AND LOWER(TRIM(village)) = LOWER(TRIM(?))
+                LIMIT 1
+            """, (owner, vill)).fetchone()
+            if p:
+                pd = dict(p)
+                return {
+                    "status": "PARTIAL MATCH",
+                    "parcel_id": pd["id"],
+                    "parcel_record_id": pd.get("record_id"),
+                    "matching_basis": f"Matched on Landowner Name '{owner}' and Village '{vill}'",
+                    "matched_parcel": pd
+                }
+
+        return {
+            "status": "NO MATCH",
+            "parcel_id": None,
+            "parcel_record_id": None,
+            "matching_basis": "No database parcel matched extracted survey or owner parameters",
+            "matched_parcel": None
+        }
+    finally:
+        c.close()
+
 def check_duplicate_parcel(survey_no: str, village: str, taluk: str, district: str, exclude_doc_id: str = None) -> dict:
-    """Check parcels and previous document extractions for duplicates."""
+    """Check parcels and previous document extractions for duplicate land claims."""
     if not survey_no or not village:
         return {"is_duplicate": False, "matched_record": None, "duplicate_type": "None"}
 
@@ -305,7 +477,7 @@ def check_duplicate_parcel(survey_no: str, village: str, taluk: str, district: s
             }
 
         query_docs = """
-            SELECT d.document_id, d.document_name, d.project_id, d.verification_status, d.upload_date
+            SELECT d.document_id, d.document_name, d.project_id, d.verification_status, COALESCE(d.upload_date, '') AS created_at
             FROM documents d
             JOIN ocr_extractions s ON s.document_id = d.document_id AND s.field_name = 'survey_number' AND LOWER(TRIM(s.value)) = LOWER(TRIM(?))
             JOIN ocr_extractions v ON v.document_id = d.document_id AND v.field_name = 'village' AND LOWER(TRIM(v.value)) = LOWER(TRIM(?))
@@ -325,42 +497,91 @@ def check_duplicate_parcel(survey_no: str, village: str, taluk: str, district: s
     finally:
         c.close()
 
-def perform_ocr(file_path: str, file_extension: str, target_lang: str = "auto") -> tuple[str, bool, str, str]:
-    if pytesseract is None:
-        return "", False, "pytesseract library not installed.", "None"
-
-    lang_cfg = SUPPORTED_LANGUAGES.get(target_lang, SUPPORTED_LANGUAGES["auto"])
-    tess_langs = lang_cfg["tess"]
-
-    try:
-        text = ""
-        if file_extension.lower() == ".pdf":
-            if convert_from_path is None:
-                return "", False, "pdf2image library not installed for PDF OCR.", "pdf2image-missing"
+def perform_ocr(file_path: str, file_extension: str, target_lang: str = "auto") -> tuple[str, bool, str, str, int, bool]:
+    """
+    Perform multi-stage OCR extraction:
+    1. Digital PDF selectable text layer extraction (via pypdf) across all pages.
+    2. Scanned PDF page rendering (via pdf2image/poppler) and Tesseract OCR.
+    3. Image preprocessed OCR (via Pillow + Tesseract).
+    
+    Returns: (raw_text, success, message, engine_name, pages_count, is_mock_fallback)
+    """
+    ext = file_extension.lower()
+    
+    # ── Stage 1: Digital PDF Text Layer Extraction ──
+    if ext == ".pdf":
+        if pypdf is not None:
             try:
-                images = convert_from_path(file_path)
-            except Exception as e:
-                return "", False, f"PDF conversion failed: {str(e)}. (Poppler might not be in PATH)", "poppler-missing"
-            for img in images:
-                try:
-                    text += pytesseract.image_to_string(img, lang=tess_langs) + "\n"
-                except Exception:
-                    text += pytesseract.image_to_string(img) + "\n"
-        else:
-            try:
-                text = pytesseract.image_to_string(Image.open(file_path), lang=tess_langs)
+                reader = pypdf.PdfReader(file_path)
+                pages_text = []
+                for i, page in enumerate(reader.pages):
+                    pt = (page.extract_text() or "").strip()
+                    if pt:
+                        pages_text.append(f"--- Page {i+1} ---\n{pt}")
+                
+                # If meaningful selectable text was found in the PDF
+                if pages_text and sum(len(t) for t in pages_text) > 15:
+                    full_text = "\n\n".join(pages_text)
+                    return full_text, True, "Digital PDF text layer extracted successfully across all pages.", "Digital PDF Parser (Embedded Text Layer)", len(reader.pages), False
             except Exception:
-                text = pytesseract.image_to_string(Image.open(file_path))
+                pass
 
-        return text, True, "OCR successful", "Tesseract OCR"
-    except pytesseract.TesseractNotFoundError:
-        return "", False, "Tesseract OCR is not installed or not in your PATH.", "tesseract-not-found"
-    except Exception as e:
-        return "", False, str(e), "ocr-error"
+        # ── Stage 2: Scanned PDF Page-by-Page OCR ──
+        poppler_dir = get_poppler_path()
+        tess_bin = get_tesseract_cmd()
+        
+        if convert_from_path is not None and (poppler_dir or shutil.which("pdftoppm")) and pytesseract is not None and tess_bin:
+            try:
+                pytesseract.pytesseract.tesseract_cmd = tess_bin
+                lang_cfg = SUPPORTED_LANGUAGES.get(target_lang, SUPPORTED_LANGUAGES["auto"])
+                tess_langs = lang_cfg["tess"]
+                
+                kwargs = {}
+                if poppler_dir:
+                    kwargs["poppler_path"] = poppler_dir
+                images = convert_from_path(file_path, **kwargs)
+                pages_text = []
+                for i, img in enumerate(images):
+                    try:
+                        p_txt = pytesseract.image_to_string(img, lang=tess_langs)
+                    except Exception:
+                        p_txt = pytesseract.image_to_string(img)
+                    pages_text.append(f"--- Page {i+1} ---\n{p_txt.strip()}")
+                
+                full_text = "\n\n".join(pages_text)
+                return full_text, True, "Multi-page scanned PDF OCR completed successfully.", "Tesseract OCR (Multi-Page Scanned PDF)", len(images), False
+            except Exception as pe:
+                return "", False, f"PDF rendering failed: {str(pe)}", "pdf2image-error", 1, False
+
+    # ── Stage 3: Image OCR ──
+    tess_bin = get_tesseract_cmd()
+    if pytesseract is not None and tess_bin:
+        try:
+            pytesseract.pytesseract.tesseract_cmd = tess_bin
+            lang_cfg = SUPPORTED_LANGUAGES.get(target_lang, SUPPORTED_LANGUAGES["auto"])
+            tess_langs = lang_cfg["tess"]
+            
+            with Image.open(file_path) as img:
+                try:
+                    text = pytesseract.image_to_string(img, lang=tess_langs)
+                except Exception:
+                    text = pytesseract.image_to_string(img)
+                    
+            if text and text.strip():
+                return text.strip(), True, "Image OCR completed successfully.", "Tesseract OCR (Image Preprocessed)", 1, False
+            else:
+                return text or "", True, "Image OCR returned empty text.", "Tesseract OCR", 1, False
+        except Exception as e:
+            return "", False, f"Tesseract error: {str(e)}", "tesseract-error", 1, False
+
+    # ── Stage 4: Engine Unavailable Fallback ──
+    return "", False, "Tesseract OCR engine is not installed or configured on host PATH.", "OCR Engine Unavailable", 1, True
 
 def extract_fields(text: str, detected_lang: str = "en") -> dict:
+    """Extract standard land record fields from raw text."""
     fields = {
         "survey_number": "",
+        "subdivision_number": "",
         "owner_name": "",
         "land_area": "",
         "village": "",
@@ -384,6 +605,7 @@ def extract_fields(text: str, detected_lang: str = "en") -> dict:
     return fields
 
 def extract_multilingual_fields(text: str, detected_lang: str = "en") -> dict:
+    """Extract structured fields with per-field confidence scoring."""
     extractions = {}
     for field_name, patterns in MULTILINGUAL_PATTERNS.items():
         found_val = ""
@@ -395,7 +617,7 @@ def extract_multilingual_fields(text: str, detected_lang: str = "en") -> dict:
                 clean_val = re.sub(r'^[^\w\u0900-\u0D7F]+|[^\w\u0900-\u0D7F]+$', '', raw_val)
                 if clean_val:
                     found_val = clean_val
-                    field_conf = 0.88 if len(clean_val) > 2 else 0.70
+                    field_conf = 0.92 if len(clean_val) > 2 else 0.75
                     break
 
         extractions[field_name] = {
@@ -407,6 +629,7 @@ def extract_multilingual_fields(text: str, detected_lang: str = "en") -> dict:
     return extractions
 
 def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
+    """Deterministic synthetic dataset for demo mode & validation."""
     name_lower = (filename or "").lower()
 
     if target_lang == "ta" or "tamil" in name_lower or "patta" in name_lower:
@@ -417,6 +640,7 @@ def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
             "raw_text": "தமிழ்நாடு அரசு நில நிர்வாகத்துறை\nபட்டா எண்: 452\nபுல எண்: 142/3B\nஉரிமையாளர் பெயர்: சுப்பிரமணியன் கே\nநிலப்பரப்பு: 2.75 ஏக்கர்\nநில வகை: நஞ்சை\nவருவாய் கிராமம்: சூலூர்\nவட்டம்: சூலூர்\nமாவட்டம்: கோயம்புத்தூர்\nமாநிலம்: தமிழ்நாடு\nபதிவு தேதி: 14/08/2023",
             "extracted": {
                 "survey_number": "142/3B",
+                "subdivision_number": "3B",
                 "khasra_khata": "452",
                 "owner_name": "சுப்பிரமணியன் கே",
                 "land_area": "2.75 ஏக்கர்",
@@ -437,6 +661,7 @@ def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
             "raw_text": "राजस्व विभाग - भू-अभिलेख\nखसरा संख्या: 312/1\nखाता संख्या: 88\nखातेदार का नाम: राजेश कुमार शर्मा\nरकबा: 1.85 हेक्टेयर\nकिस्म: कृषि भूमि\nग्राम: रामपुर\nतहसील: सदर\nजिला: कोयंबटूर\nराज्य: तमिलनाडु\nदिनांक: 22/11/2023",
             "extracted": {
                 "survey_number": "312/1",
+                "subdivision_number": "1",
                 "khasra_khata": "88",
                 "owner_name": "राजेश कुमार शर्मा",
                 "land_area": "1.85 हेक्टेयर",
@@ -457,6 +682,7 @@ def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
             "raw_text": "महाराष्ट्र शासन - भूमी अभिलेख (गाव नमुना ७/१२)\nसर्व्हे / गट क्रमांक: 215/4\nखाते क्रमांक: 104\nखातेदाराचे नाव: आनंद विठ्ठलराव पाटील\nक्षेत्रफळ: 0.95 हेक्टर\nजमिनीचा प्रकार: जिरायत\nगाव: सुलूर\nतालुका: सुलूर\nजिल्हा: कोइम्बतूर\nराज्य: तमिळनाडू\nदिनांक: 05/04/2023",
             "extracted": {
                 "survey_number": "215/4",
+                "subdivision_number": "4",
                 "khasra_khata": "104",
                 "owner_name": "आनंद विठ्ठलराव पाटील",
                 "land_area": "0.95 हेक्टर",
@@ -477,6 +703,7 @@ def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
             "raw_text": "రెవెన్యూ రికార్డు - పట్టాదారు పాస్ పుస్తకం\nసర్వే నెం: 89/2A\nఖాతా నెం: 74\nపట్టాదారుని పేరు: వెంకటేశ్వర రావు\nవిస్తీర్ణము: 3.20 ఎకరాలు\nగ్రామము: సూలూరు\nమండలం: సూలూరు\nజిల్లా: కోయంబత్తూరు\nరాష్ట్రం: తమిళనాడు\nతేదీ: 12/06/2023",
             "extracted": {
                 "survey_number": "89/2A",
+                "subdivision_number": "2A",
                 "khasra_khata": "74",
                 "owner_name": "వెంకటేశ్వర రావు",
                 "land_area": "3.20 ఎకరాలు",
@@ -494,9 +721,10 @@ def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
             "lang": "en",
             "lang_name": "English",
             "script": "Latin",
-            "raw_text": "Government of Tamil Nadu - Revenue Department\nTitle Deed / Patta Record\nSurvey No: 123/4A\nKhata No: 56\nOwner Name: K. Balasubramanian\nLand Area: 2.50 acres\nClassification: Wet / Agricultural\nVillage: Sulur\nTaluk: Sulur\nDistrict: Coimbatore\nState: Tamil Nadu\nDocument No: DOC-2023-8841\nDate: 12/05/2023",
+            "raw_text": "Government of Tamil Nadu - Revenue Department\nTitle Deed / Patta Record\nSurvey No: 123/4A\nSub-Division No: 4A\nKhata No: 56\nOwner Name: K. Balasubramanian\nLand Area: 2.50 acres\nClassification: Wet / Agricultural\nVillage: Sulur\nTaluk: Sulur\nDistrict: Coimbatore\nState: Tamil Nadu\nDocument No: DOC-2023-8841\nDate: 12/05/2023",
             "extracted": {
                 "survey_number": "123/4A",
+                "subdivision_number": "4A",
                 "khasra_khata": "56",
                 "owner_name": "K. Balasubramanian",
                 "land_area": "2.50 acres",
@@ -511,7 +739,7 @@ def _get_mock_multilingual_data(target_lang: str, filename: str) -> dict:
         }
 
 def process_document(filename: str, content: bytes, language: str = "auto", mode: str = "auto"):
-    """Adapter for intelligence.py: accepts filename and raw bytes, saves to temp, runs OCR."""
+    """Adapter for intelligence: accepts filename and raw bytes, saves to temp, runs OCR."""
     import tempfile
     ext = os.path.splitext(filename)[1] or ".bin"
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
@@ -526,7 +754,11 @@ def process_document(filename: str, content: bytes, language: str = "auto", mode
             pass
     return result
 
-def process_document_for_ocr(file_path: str, language: str = "auto", mode: str = "auto") -> dict:
+def process_document_for_ocr(file_path: str, language: str = "auto", mode: str = "auto", parcel_id: int = None, project_id: str = None) -> dict:
+    """
+    Main entry point for document OCR extraction.
+    Executes real OCR (PDF text layer / Tesseract / multi-page) and structured matching.
+    """
     file_p = Path(file_path)
     if not file_p.is_absolute() or not file_p.exists():
         candidates = [
@@ -549,8 +781,8 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
             "error_code": "HANDWRITTEN_MODEL_UNAVAILABLE"
         }
 
+    # If physical file does not exist on disk, use synthetic demo mode
     if not file_p.exists():
-        # Physical file is absent, synthesize demo OCR result gracefully
         mock_data = _get_mock_multilingual_data(language, file_p.name)
         text = mock_data["raw_text"]
         detected_lang = mock_data["lang"]
@@ -558,7 +790,7 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
         lang_name = mock_data["lang_name"]
         lang_conf = 0.85
         lang_uncert = "Estimated confidence"
-        ocr_engine = "DEMO/MOCK FALLBACK (Host sample file not present on disk)"
+        ocr_engine = "Synthetic OCR / Demo Mode (Host sample record)"
         fields_raw = mock_data["extracted"]
         extracted_fields = {
             fn: {
@@ -575,6 +807,8 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
         taluk = flat_extracted.get("taluk", "")
         district = flat_extracted.get("district", "")
         dup_info = check_duplicate_parcel(survey_no, village, taluk, district)
+        match_info = match_parcel_to_document(flat_extracted, original_parcel_id=parcel_id, project_id=project_id)
+        
         return {
             "success": True,
             "raw_text": text,
@@ -584,28 +818,40 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
             "language_confidence": lang_conf,
             "uncertainty_label": lang_uncert,
             "ocr_engine": ocr_engine,
+            "ocr_mode": "synthetic",
             "is_mock_fallback": True,
+            "pages_processed": 1,
             "processing_mode": mode or "auto",
             "preprocessed_image": None,
             "preprocessing_metrics": {},
             "confidence": 0.85,
             "extracted": flat_extracted,
             "detailed_extractions": extracted_fields,
+            "match": match_info,
             "ocr_status": "Verification Required",
             "human_verification_required": True,
             "duplicate_detection": dup_info,
-            "message": f"Multilingual extraction complete ({lang_name} / {detected_script}). Engine: {ocr_engine}."
+            "message": f"Synthetic demo OCR extraction complete ({lang_name} / {detected_script}). Engine: {ocr_engine}."
         }
 
+    # Preprocess image if image format
     processed_p = file_p.parent / f"proc_{file_p.stem}.png"
-    preproc_metrics = preprocess_image(file_p, processed_p)
-    target_ocr_path = str(processed_p) if processed_p.exists() and ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff"] else str(file_p)
+    preproc_metrics = {}
+    if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"]:
+        preproc_metrics = preprocess_image(file_p, processed_p)
+        target_ocr_path = str(processed_p) if processed_p.exists() else str(file_p)
+    else:
+        target_ocr_path = str(file_p)
 
-    text, success, msg, engine_name = perform_ocr(target_ocr_path, ext, target_lang=language)
+    text, success, msg, engine_name, pages_count, is_fallback = perform_ocr(target_ocr_path, ext, target_lang=language)
 
     is_mock_fallback = False
-    if not success and any(err in msg for err in ["Tesseract", "Poppler", "not installed", "failed", "tesseract-not-found", "cannot identify", "identify image"]):
+    ocr_mode = "real"
+
+    if not success and is_fallback:
+        # Tesseract is not installed on host, use graceful Demo/Synthetic Mode
         is_mock_fallback = True
+        ocr_mode = "synthetic"
         mock_data = _get_mock_multilingual_data(language, file_p.name)
         text = mock_data["raw_text"]
         detected_lang = mock_data["lang"]
@@ -613,7 +859,7 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
         lang_name = mock_data["lang_name"]
         lang_conf = 0.85
         lang_uncert = "Estimated confidence"
-        ocr_engine = "DEMO/MOCK FALLBACK (Host Tesseract unavailable in PATH)"
+        ocr_engine = "Synthetic OCR / Demo Mode (Host OCR engine unavailable)"
         fields_raw = mock_data["extracted"]
         
         extracted_fields = {}
@@ -626,10 +872,12 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
             }
         avg_confidence = 0.85
     elif not success:
-        return {"success": False, "message": msg}
+        return {"success": False, "message": msg, "ocr_status": "Failed", "error_code": "OCR_EXECUTION_ERROR"}
     else:
+        # Real OCR Succeeded!
         is_mock_fallback = False
-        ocr_engine = f"Tesseract OCR ({engine_name})"
+        ocr_mode = "real"
+        ocr_engine = engine_name
         script_info = detect_script_and_language(text)
         detected_lang = script_info["language"]
         detected_script = script_info["script"]
@@ -639,7 +887,7 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
 
         extracted_fields = extract_multilingual_fields(text, detected_lang=detected_lang)
         conf_vals = [f["confidence"] for f in extracted_fields.values() if f["value"]]
-        avg_confidence = round(sum(conf_vals) / len(conf_vals), 2) if conf_vals else 0.70
+        avg_confidence = round(sum(conf_vals) / len(conf_vals), 2) if conf_vals else 0.85
 
     flat_extracted = {k: v["value"] for k, v in extracted_fields.items()}
 
@@ -648,19 +896,21 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
     taluk = flat_extracted.get("taluk", "")
     district = flat_extracted.get("district", "")
     dup_info = check_duplicate_parcel(survey_no, village, taluk, district)
+    match_info = match_parcel_to_document(flat_extracted, original_parcel_id=parcel_id, project_id=project_id)
 
-    has_low_conf = any(f["requires_verification"] for f in extracted_fields.values())
     overall_status = "Verification Required"
 
     return {
         "success": True,
         "raw_text": text,
+        "pages_processed": pages_count,
         "language": detected_lang,
         "language_name": lang_name,
         "script": detected_script,
         "language_confidence": lang_conf,
         "uncertainty_label": lang_uncert,
         "ocr_engine": ocr_engine,
+        "ocr_mode": ocr_mode,
         "is_mock_fallback": is_mock_fallback,
         "processing_mode": mode or "auto",
         "preprocessed_image": str(processed_p.name) if processed_p.exists() else None,
@@ -668,9 +918,10 @@ def process_document_for_ocr(file_path: str, language: str = "auto", mode: str =
         "confidence": avg_confidence,
         "extracted": flat_extracted,
         "detailed_extractions": extracted_fields,
+        "match": match_info,
         "ocr_status": overall_status,
         "human_verification_required": True,
         "duplicate_detection": dup_info,
-        "message": f"Multilingual extraction complete ({lang_name} / {detected_script}). Engine: {ocr_engine}."
+        "message": f"Multilingual OCR processing complete ({lang_name} / {detected_script}). Engine: {ocr_engine}."
     }
 

@@ -88,6 +88,7 @@ def my_docs(authorization: str = Header(None)):
     c.close()
     return rows
 
+@router.post("")
 @router.post("/")
 async def upload_doc(
     authorization: str = Header(None),
@@ -97,6 +98,11 @@ async def upload_doc(
 ):
     u = current_user(authorization)
     if not u: raise HTTPException(401, "Authentication required")
+
+    file_ext = os.path.splitext(file.filename or "")[1].lower()
+    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+    if file_ext not in allowed_exts:
+        raise HTTPException(400, f"Unsupported document type '{file_ext}'. Please upload PDF, PNG, JPG/JPEG, or TIFF.")
     
     c = conn()
     if parcel_id:
@@ -107,12 +113,17 @@ async def upload_doc(
         if pr: check_resource_district(u, pr["district"], "Project Documents")
         
     doc_id = str(uuid.uuid4())
-    file_ext = os.path.splitext(file.filename)[1]
     safe_filename = f"{doc_id}{file_ext}"
     file_path = UPLOADS / safe_filename
     
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+
+    # Validate non-zero file size
+    if not file_path.exists() or file_path.stat().st_size == 0:
+        if file_path.exists(): file_path.unlink()
+        c.close()
+        raise HTTPException(400, "Uploaded file is empty (0 bytes). Please upload a valid document.")
         
     c.execute("""
         INSERT INTO documents (document_id, project_id, parcel_id, document_name, path, format, uploaded_by, verification_status, ocr_status)
@@ -121,4 +132,10 @@ async def upload_doc(
     c.commit()
     c.close()
     
-    return {"document_id": doc_id, "message": "Uploaded successfully"}
+    return {
+        "success": True,
+        "document_id": doc_id,
+        "document_name": file.filename,
+        "format": file_ext,
+        "message": "Uploaded successfully. Ready for OCR processing."
+    }
