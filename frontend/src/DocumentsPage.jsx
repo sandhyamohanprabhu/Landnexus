@@ -29,9 +29,11 @@ export default function DocumentsPage({ user, selected, district }) {
   const [processingMode, setProcessingMode] = useState("auto");
   const [runningOcr, setRunningOcr] = useState(false);
 
-  // Fetch documents for the project, parcel, or district
-  const dist = district || "Coimbatore";
-  const query = parcelId ? `?parcel_id=${parcelId}` : (projectId ? `?project_id=${projectId}` : `?district=${encodeURIComponent(dist)}`);
+  // Fetch documents for the project, parcel, or district scoped cleanly to user permissions
+  const dist = user?.district_scope || district || (user?.state_scope === "Kerala" ? "Palakkad" : (user?.role === "national_authority" || user?.role === "admin" ? "all" : "Coimbatore"));
+  const query = user?.role === "citizen" 
+    ? "" 
+    : (parcelId ? `?parcel_id=${parcelId}` : (projectId ? `?project_id=${projectId}` : `?district=${encodeURIComponent(dist)}`));
   const { data: documents, error: fetchError } = useData(`/documents/${query}`, 5000);
   const { data: analyticsData } = useData(`/ocr/analytics?district=${encodeURIComponent(dist)}`, 10000);
   const { data: queueData } = useData(`/ocr/verification-queue?district=${encodeURIComponent(dist)}`, 5000);
@@ -407,7 +409,7 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
     }
   };
 
-  const canVerify = ["authority", "admin", "acquisition_officer", "district_authority", "state_authority", "field_officer"].includes(user?.role);
+  const canVerify = ["authority", "admin", "acquisition_officer", "district_authority", "state_authority", "field_officer", "national_authority"].includes(user?.role);
   const isVerified = ocrData.ocr_status === "Verified";
   const isRejected = ocrData.ocr_status === "Rejected";
 
@@ -526,7 +528,7 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
           {/* Image display container */}
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#ffffff", border: "1px dashed #cbd5e1", borderRadius: "4px", overflow: "hidden", minHeight: "320px", position: "relative" }}>
             <img
-              src={`/ocr/${documentId}/preview?version=${previewVersion}&t=${Date.now()}`}
+              src={`${API_BASE_URL}/ocr/${documentId}/preview?version=${previewVersion}&t=${Date.now()}`}
               alt="Document Preview"
               style={{ maxWidth: "100%", maxHeight: "380px", objectFit: "contain" }}
               onError={(e) => {

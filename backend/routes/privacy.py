@@ -366,7 +366,7 @@ def list_access_requests(
     params = []
 
     # Role-based visibility
-    if u["role"] not in ("authority", "admin", "state_authority", "district_authority"):
+    if u["role"] not in ("authority", "national_authority", "admin", "state_authority", "district_authority"):
         query += " AND lower(r.requested_by) = lower(?)"
         params.append(u["email"])
     elif u.get("district_scope"):
@@ -402,7 +402,7 @@ def approve_access_request(
     Approve temporary access request. Grants time-bound access.
     """
     u = current_user(authorization)
-    if not u or u["role"] not in ("authority", "admin", "state_authority", "district_authority"):
+    if not u or u["role"] not in ("authority", "national_authority", "admin", "state_authority", "district_authority"):
         raise HTTPException(403, "Authority or Admin role required to approve access requests")
 
     c = conn()
@@ -456,7 +456,7 @@ def reject_access_request(
     Reject temporary access request with a reason.
     """
     u = current_user(authorization)
-    if not u or u["role"] not in ("authority", "admin", "state_authority", "district_authority"):
+    if not u or u["role"] not in ("authority", "national_authority", "admin", "state_authority", "district_authority"):
         raise HTTPException(403, "Authority or Admin role required to reject access requests")
 
     reason = payload.get("reason", "Access denied under data minimisation policy").strip()
@@ -710,7 +710,7 @@ def get_privacy_audit_trail(
     Retrieve privacy audit trail without raw PII.
     """
     u = current_user(authorization)
-    if not u or u["role"] not in ("authority", "admin", "state_authority", "district_authority"):
+    if not u or u["role"] not in ("authority", "national_authority", "admin", "state_authority", "district_authority"):
         raise HTTPException(403, "Authority access required to view privacy audit ledger")
 
     c = conn()

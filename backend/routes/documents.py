@@ -10,6 +10,20 @@ router = APIRouter()
 def docs(authorization: str = Header(None), parcel_id: int = None, project_id: str = None, district: str = None):
     u = current_user(authorization)
     if not u: raise HTTPException(401, "Authentication required")
+
+    # If citizen, return citizen's own documents
+    if u.get("role") == "citizen":
+        c = conn()
+        rows = [dict(x) for x in c.execute("""
+            SELECT d.*, p.survey_no, p.village, p.district
+            FROM documents d
+            LEFT JOIN parcels p ON p.id = d.parcel_id
+            WHERE lower(p.owner_reference) = lower(?) OR lower(d.uploaded_by) = lower(?)
+            ORDER BY d.id DESC
+        """, (u["email"], u["email"])).fetchall()]
+        c.close()
+        return rows
+
     district = enforce_district_scope(u, district)
     c = conn()
     if parcel_id:
