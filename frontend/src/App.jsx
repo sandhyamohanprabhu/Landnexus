@@ -1243,21 +1243,122 @@ function Panel({ title, children }) {
   return <section className="panel"><div className="panel-head"><h2>{title}</h2></div>{children}</section>;
 }
 
-function Table({ rows, cols, onClick, actions }) {
-  if (!rows || rows.length === 0) return <p>No records found.</p>;
+function TableAdjusterBar({ density, onDensityChange, onScrollLeft, onScrollRight, totalColumns, showScroll = true }) {
   return (
-    <div className="table-wrap">
-      <table>
-        <thead><tr>{cols.map(c => <th key={c}>{c.replaceAll("_", " ")}</th>)}{actions && <th>Actions</th>}</tr></thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.id || r.project_id || r.record_id || i} onClick={() => onClick && onClick(r)}>
-              {cols.map(c => <td key={c}>{String(r[c] ?? "")}</td>)}
-              {actions && <td onClick={e => e.stopPropagation()}>{actions(r)}</td>}
+    <div className="table-controls-bar">
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 700, color: "#1e293b", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+          <span>📐</span>
+          <span>View Layout:</span>
+        </span>
+        <div style={{ display: "inline-flex", background: "#e2e8f0", padding: "2px", borderRadius: "6px", gap: "2px" }}>
+          <button
+            type="button"
+            className={`table-control-btn ${density === "compact" ? "active" : ""}`}
+            onClick={() => onDensityChange && onDensityChange("compact")}
+            title="Compact View - Fit all side columns onto standard screens"
+          >
+            Compact 🔍
+          </button>
+          <button
+            type="button"
+            className={`table-control-btn ${density === "normal" ? "active" : ""}`}
+            onClick={() => onDensityChange && onDensityChange("normal")}
+            title="Standard Balanced View"
+          >
+            Standard
+          </button>
+          <button
+            type="button"
+            className={`table-control-btn ${density === "wide" ? "active" : ""}`}
+            onClick={() => onDensityChange && onDensityChange("wide")}
+            title="Wide View - Maximum column readability"
+          >
+            Wide ↔
+          </button>
+        </div>
+      </div>
+
+      {showScroll && (
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          {totalColumns ? (
+            <span style={{ fontSize: "10.5px", color: "#64748b" }}>
+              {totalColumns} Columns ·
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="table-control-btn"
+            onClick={onScrollLeft}
+            title="Scroll Left"
+          >
+            ◂ Pan Left
+          </button>
+          <button
+            type="button"
+            className="table-control-btn"
+            onClick={onScrollRight}
+            title="Scroll Right to view side columns & actions"
+          >
+            Pan Right ▸
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Table({ rows, cols, onClick, actions, stickyActions = true, showAdjuster = true }) {
+  const [density, setDensity] = useState("normal");
+  const tableWrapRef = useRef(null);
+
+  if (!rows || rows.length === 0) return <p style={{ padding: "16px", color: "#64748b" }}>No records found.</p>;
+
+  const scrollLeft = () => {
+    if (tableWrapRef.current) tableWrapRef.current.scrollBy({ left: -320, behavior: "smooth" });
+  };
+  const scrollRight = () => {
+    if (tableWrapRef.current) tableWrapRef.current.scrollBy({ left: 320, behavior: "smooth" });
+  };
+
+  const totalCols = (cols?.length || 0) + (actions ? 1 : 0);
+  const minW = density === "compact" ? `${Math.max(650, totalCols * 115)}px`
+             : density === "wide" ? `${Math.max(900, totalCols * 180)}px`
+             : `${Math.max(780, totalCols * 140)}px`;
+
+  return (
+    <div style={{ width: "100%", margin: "8px 0" }}>
+      {showAdjuster && (
+        <TableAdjusterBar
+          density={density}
+          onDensityChange={setDensity}
+          onScrollLeft={scrollLeft}
+          onScrollRight={scrollRight}
+          totalColumns={totalCols}
+        />
+      )}
+      <div
+        ref={tableWrapRef}
+        className={`table-wrap table-density-${density} ${stickyActions ? "table-sticky-actions" : ""}`}
+        style={showAdjuster ? { borderTopLeftRadius: 0, borderTopRightRadius: 0 } : {}}
+      >
+        <table style={{ minWidth: minW }}>
+          <thead>
+            <tr>
+              {cols.map(c => <th key={c}>{c.replaceAll("_", " ")}</th>)}
+              {actions && <th style={{ textAlign: "center" }}>Actions</th>}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.id || r.project_id || r.record_id || i} onClick={() => onClick && onClick(r)}>
+                {cols.map(c => <td key={c}>{String(r[c] ?? "")}</td>)}
+                {actions && <td onClick={e => e.stopPropagation()} style={{ textAlign: "center" }}>{actions(r)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -2907,6 +3008,17 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
   const [inspectingParcel, setInspectingParcel] = useState(null);
   const [groundForm, setGroundForm] = useState({ condition: "Pucca residential dwelling / Clear demarcation", gps_lat: "11.0168", gps_lon: "76.9558", remarks: "Site visit conducted. Boundary pillars verified. Physical structures matched with land records." });
   const [savingGround, setSavingGround] = useState(false);
+  
+  // Table View & Density Adjuster State
+  const [fieldDensity, setFieldDensity] = useState("normal");
+  const fieldTableRef = useRef(null);
+  const [dssDensity, setDssDensity] = useState("normal");
+  const dssTableRef = useRef(null);
+
+  const scrollFieldLeft = () => fieldTableRef.current?.scrollBy({ left: -320, behavior: "smooth" });
+  const scrollFieldRight = () => fieldTableRef.current?.scrollBy({ left: 320, behavior: "smooth" });
+  const scrollDssLeft = () => dssTableRef.current?.scrollBy({ left: -320, behavior: "smooth" });
+  const scrollDssRight = () => dssTableRef.current?.scrollBy({ left: 320, behavior: "smooth" });
 
   if (error) return <Panel title={`Field Verification Worklist (${dist})`}><div className="error">Unable to load field assignments ({error.status || "network error"}): {error.message} <RefreshButton /></div></Panel>;
   if (!d) return <Panel title={`Field Verification Worklist (${dist})`}><p>Loading field assignments...</p></Panel>;
@@ -2934,6 +3046,9 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
 
   const pendingAssignments = d.filter(r => (r.assignment_status || "").toLowerCase().includes("pending"));
 
+  const fieldMinW = fieldDensity === "compact" ? "1050px" : (fieldDensity === "wide" ? "1580px" : "1300px");
+  const dssMinW = dssDensity === "compact" ? "950px" : (dssDensity === "wide" ? "1400px" : "1180px");
+
   return (
     <>
       {/* ── AI Priority Verification Queue (DSS) ── */}
@@ -2942,8 +3057,20 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
           <div style={{ background: "#e8f0fe", padding: "10px 14px", borderRadius: "8px", border: "1px solid #c2e7ff", marginBottom: "14px", fontSize: "12px", color: "#1967d2" }}>
             <b>Field Officer Decision Support:</b> High & critical risk parcels requiring ground verification, boundary check, or evidence collection are ranked by composite priority score.
           </div>
-          <div className="table-wrap">
-            <table>
+          
+          <TableAdjusterBar
+            density={dssDensity}
+            onDensityChange={setDssDensity}
+            onScrollLeft={scrollDssLeft}
+            onScrollRight={scrollDssRight}
+            totalColumns={8}
+          />
+          <div
+            ref={dssTableRef}
+            className={`table-wrap table-density-${dssDensity} table-sticky-actions`}
+            style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
+          >
+            <table style={{ minWidth: dssMinW }}>
               <thead>
                 <tr>
                   <th>Rank</th>
@@ -2953,7 +3080,7 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
                   <th>Risk Level</th>
                   <th>Data Quality</th>
                   <th>AI Recommendation</th>
-                  <th>Actions</th>
+                  <th style={{ textAlign: "center" }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -2966,7 +3093,7 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
                     <td><DSSBadge level={p.risk_level} /></td>
                     <td>{p.components?.data_quality?.label}</td>
                     <td style={{ maxWidth: "320px", fontSize: "12px", fontWeight: 500 }}>{p.recommendation}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
+                    <td style={{ whiteSpace: "nowrap", textAlign: "center" }}>
                       <button
                         type="button"
                         onClick={() => setActiveDssParcel(activeDssParcel?.parcel_id === p.parcel_id ? null : p)}
@@ -3065,8 +3192,19 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
           </span>
         </div>
 
-        <div className="table-wrap">
-          <table>
+        <TableAdjusterBar
+          density={fieldDensity}
+          onDensityChange={setFieldDensity}
+          onScrollLeft={scrollFieldLeft}
+          onScrollRight={scrollFieldRight}
+          totalColumns={9}
+        />
+        <div
+          ref={fieldTableRef}
+          className={`table-wrap table-density-${fieldDensity} table-sticky-actions`}
+          style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
+        >
+          <table style={{ minWidth: fieldMinW }}>
             <thead>
               <tr>
                 <th>Parcel ID</th>
@@ -3077,7 +3215,7 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
                 <th>Physical / Site Visit</th>
                 <th>R&R Overview</th>
                 <th>Assignment Status</th>
-                <th>Actions</th>
+                <th style={{ textAlign: "center" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -3143,15 +3281,15 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
                         {r.assignment_status || (isVerified ? "Verified" : "Assigned")}
                       </span>
                     </td>
-                    <td>
-                      <div style={{ display: "flex", gap: "6px" }}>
+                    <td style={{ textAlign: "center" }}>
+                      <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
                         <button
                           type="button"
                           onClick={() => setInspectingParcel(r)}
                           style={{
                             background: "#0f6c70", color: "#ffffff", border: "none",
                             padding: "5px 9px", borderRadius: "5px", fontSize: "11px", fontWeight: 700,
-                            cursor: "pointer"
+                            cursor: "pointer", whiteSpace: "nowrap"
                           }}
                         >
                           🔍 Ground Inspection
@@ -3161,7 +3299,7 @@ function FieldVerification({ district, user, go, onNavigateRR }) {
                           onClick={() => go({ project_id: r.project_id, parcel_id: r.parcel_id })}
                           style={{
                             background: "#475569", color: "#ffffff", border: "none",
-                            padding: "5px 8px", borderRadius: "5px", fontSize: "11px", cursor: "pointer"
+                            padding: "5px 8px", borderRadius: "5px", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap"
                           }}
                         >
                           Photos / OCR
@@ -8958,6 +9096,7 @@ function App() {
   const [selectedDistrict, setSelectedDistrict] = useState("Coimbatore");
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [showWelcomePrompt, setShowWelcomePrompt] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const setPage = (newPage, updateHistory = true) => {
     setPageState(newPage);
@@ -9094,10 +9233,29 @@ function App() {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="sidebar-header side-header" data-tutorial="sidebar-logo">
-          <div className="logo">LAND<span>NEXUS</span></div>
-          <div className="tag">SIH 26016 CORE</div>
+      <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+        <div className="sidebar-header side-header" data-tutorial="sidebar-logo" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div className="logo">LAND<span>NEXUS</span></div>
+            <div className="tag">SIH 26016 CORE</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(true)}
+            style={{
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              color: "#cbd5e1",
+              borderRadius: "4px",
+              padding: "3px 6px",
+              fontSize: "11px",
+              cursor: "pointer",
+              marginTop: "4px"
+            }}
+            title="Collapse Sidebar for Full Width View"
+          >
+            ⇤
+          </button>
         </div>
         <nav className="sidebar-nav nav-menu">
           {allowedNav.map(n => (
@@ -9134,7 +9292,7 @@ function App() {
           <button className="nav logout" onClick={() => { localStorage.removeItem("survi_token"); setUser(null); }}>Logout</button>
         </div>
       </aside>
-      <main className="content main-content">
+      <main className={`content main-content ${sidebarCollapsed ? "expanded-width" : ""}`}>
         <header>
           <div>
             <div className="eyebrow">
@@ -9283,7 +9441,34 @@ function App() {
               </div>
             )}
           </div>
-          <div className="user-pill">{(user?.role || "user").replaceAll("_", " ")}<br /><small>{user?.email || ""}</small></div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{
+                background: sidebarCollapsed ? "#0f6c70" : "#ffffff",
+                color: sidebarCollapsed ? "#ffffff" : "#334155",
+                border: `1px solid ${sidebarCollapsed ? "#0f6c70" : "#cbd5e1"}`,
+                padding: "7px 12px",
+                borderRadius: "8px",
+                fontSize: "12px",
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+                transition: "all 0.15s ease"
+              }}
+              title={sidebarCollapsed ? "Expand sidebar menu to standard layout" : "Collapse sidebar menu to enable full-screen width for wide tables & maps"}
+            >
+              <span>{sidebarCollapsed ? "⇥ Expand Menu" : "⇤ Full Width View"}</span>
+              <span style={{ fontSize: "10px", background: sidebarCollapsed ? "rgba(255,255,255,0.25)" : "#f1f5f9", padding: "1px 5px", borderRadius: "4px" }}>
+                {sidebarCollapsed ? "100% Screen" : "Adjust"}
+              </span>
+            </button>
+            <div className="user-pill">{(user?.role || "user").replaceAll("_", " ")}<br /><small>{user?.email || ""}</small></div>
+          </div>
         </header>
         {selected && <div className="context-strip">Selected Context: {selected.project_id || selected.record_id || selected.survey_no} <button onClick={() => setSelected(null)}>×</button></div>}
         <ErrorBoundary>
@@ -9371,4 +9556,4 @@ function App() {
 }
 
 export default App;
-export { api, API, useData, Panel, Table, ActionButton, EventBus, DataPanel, RefreshButton, AlertTable };
+export { api, API, useData, Panel, Table, TableAdjusterBar, ActionButton, EventBus, DataPanel, RefreshButton, AlertTable };

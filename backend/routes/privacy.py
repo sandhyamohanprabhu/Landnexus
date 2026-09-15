@@ -4,6 +4,7 @@ RESTful endpoints for sensitive data detection, visibility evaluation, temporary
 privacy-safe PDF streaming, and authority governance.
 """
 
+import os
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Header, HTTPException, Body, Query, Response
 from backend.core import conn, current_user, audit, enforce_district_scope, check_resource_district
@@ -82,10 +83,10 @@ def analyze_document_privacy(
     extractions_rows = c.execute("SELECT field_name, value FROM ocr_extractions WHERE document_id=?", (document_id,)).fetchall()
     extractions = {r["field_name"]: r["value"] for r in extractions_rows}
 
-    # Fetch raw text or run OCR if missing
+    # Fetch raw text or run OCR if file exists on disk
     raw_text = ""
-    if not extractions:
-        file_path = doc["path"]
+    file_path = doc["path"]
+    if file_path and os.path.exists(file_path):
         ocr_res = process_document_for_ocr(file_path)
         if ocr_res.get("success"):
             raw_text = ocr_res.get("raw_text", "")
@@ -99,12 +100,12 @@ def analyze_document_privacy(
             c.execute("UPDATE documents SET ocr_status='Verified' WHERE document_id=?", (document_id,))
             c.commit()
 
-    if not extractions and not raw_text:
-        # Fallback inspection on remarks/metadata
-        raw_text = doc["remarks"] or f"Document {doc['document_name']} for parcel {doc['parcel_id']}"
+    combined_text = f"{raw_text} {doc['remarks'] or ''}".strip()
+    if not combined_text:
+        combined_text = f"Document {doc['document_name']} for parcel {doc['parcel_id']}"
 
     # Detect Sensitive Entities
-    detections = detect_sensitive_entities(raw_text, extractions)
+    detections = detect_sensitive_entities(combined_text, extractions)
 
     # Calculate risk score
     risk_info = calculate_privacy_risk_score(detections)
