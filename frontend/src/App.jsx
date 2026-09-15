@@ -2730,7 +2730,7 @@ function DataPanel({ title, data, error, children, empty = false }) {
   if (error) return <Panel title={title}><div className="error">Unable to load {title} ({error.status || "network error"}): {error.message} <RefreshButton /></div></Panel>;
   if (!data) return <Panel title={title}><p>Loading {title.toLowerCase()}...</p></Panel>;
   if (empty) return <Panel title={title}><div className="empty">No {title.toLowerCase()} found.</div><RefreshButton /></Panel>;
-  return children;
+  return children || null;
 }
 
 function RiskIntelligence({ district, go }) {
@@ -2741,10 +2741,12 @@ function RiskIntelligence({ district, go }) {
   const [explanationParcel, setExplanationParcel] = useState(null);
   const { data: explanation, error: explanationError } = useData(explanationParcel ? `/ml/parcels/${explanationParcel.parcel_id}/explanation` : null);
   if (error || !data) return <DataPanel title={`Risk Intelligence (${dist})`} data={data} error={error} />;
-  const risk = data.risk;
+  const risk = data?.risk || {};
+  const topParcels = risk.top_parcels || [];
   const matches = row => `${row.parcel_id || ""} ${row.survey_no || ""} ${row.project_id || ""} ${row.project_name || ""} ${row.village || ""} ${row.taluk || ""} ${row.district || ""}`.toLowerCase().includes(query.toLowerCase());
-  const rows = risk.top_parcels.filter(r => (category === "ALL" || r.risk_category === category) && matches(r));
+  const rows = topParcels.filter(r => (category === "ALL" || r.risk_category === category) && matches(r));
   const open = row => go({ project_id: row.project_id, parcel_id: row.parcel_id, record_id: row.record_id, survey_no: row.survey_no });
+  const riskDist = data?.parcels?.risk_distribution || [];
   return (
     <>
       <Panel title={`Risk Intelligence · ${dist}`}>
@@ -2752,16 +2754,16 @@ function RiskIntelligence({ district, go }) {
         {risk.prediction_count === 0 && <div className="notice">No risk predictions available for {dist}.</div>}
         {risk.synthetic_note && <div className="notice">{risk.synthetic_note}</div>}
         <div className="cards">
-          <div className="metric"><span>Total Risk Parcels</span><b>{risk.total}</b></div>
-          {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map(level => <div className="metric" key={level}><span>{level} RISK</span><b>{data.parcels.risk_distribution.find(x => x.category === level)?.count || 0}</b></div>)}
+          <div className="metric"><span>Total Risk Parcels</span><b>{risk.total || 0}</b></div>
+          {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map(level => <div className="metric" key={level}><span>{level} RISK</span><b>{riskDist.find(x => x.category === level)?.count || 0}</b></div>)}
           <div className="metric"><span>Average Risk Score</span><b>{risk.average_score ?? "N/A"}</b></div>
         </div>
       </Panel>
       <div className="grid2">
-        <Panel title="Risk Distribution">{risk.prediction_count ? <Table rows={risk.prediction_distribution} cols={["category", "count"]} /> : <div className="empty">No risk predictions available.</div>}</Panel>
-        <Panel title="Project-wise Risk"><Table rows={risk.project_wise.slice(0, 20)} cols={["project_id", "project_name", "parcels", "high_risk", "average_risk_score"]} onClick={r => go({ project_id: r.project_id })} /></Panel>
+        <Panel title="Risk Distribution">{risk.prediction_count ? <Table rows={risk.prediction_distribution || []} cols={["category", "count"]} /> : <div className="empty">No risk predictions available.</div>}</Panel>
+        <Panel title="Project-wise Risk"><Table rows={(risk.project_wise || []).slice(0, 20)} cols={["project_id", "project_name", "parcels", "high_risk", "average_risk_score"]} onClick={r => go({ project_id: r.project_id })} /></Panel>
       </div>
-      <Panel title="Village-wise Risk"><Table rows={risk.village_wise.slice(0, 30)} cols={["village", "taluk", "district", "parcels", "high_risk", "average_risk_score"]} /></Panel>
+      <Panel title="Village-wise Risk"><Table rows={(risk.village_wise || []).slice(0, 30)} cols={["village", "taluk", "district", "parcels", "high_risk", "average_risk_score"]} /></Panel>
       <Panel title="Top High-risk Parcels">
         <AlertTable rows={rows} columns={[{key:"parcel_id",label:"Parcel ID"},{key:"survey_no",label:"Survey Number"},{key:"project_id",label:"Project"},{key:"project_name",label:"Project Name"},{key:"village",label:"Village"},{key:"taluk",label:"Taluk"},{key:"district",label:"District"},{key:"risk_category",label:"Risk Category"},{key:"risk_score",label:"Risk Score",render:r=>r.risk_score ?? "N/A"},{key:"assessed_at",label:"Assessed"}]} onOpen={row => setExplanationParcel(row)} actionLabel="View Explanation" emptyMessage="No risk records available." />
       </Panel>
@@ -2783,7 +2785,8 @@ function AlertsPage({ district, go }) {
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
   if (error || !data) return <DataPanel title={`Alerts (${dist})`} data={data} error={error} />;
-  const visible = data.filter(a => (filter === "All" || (filter === "Unread" ? a.read_status === "Unread" : a.category === filter)) && `${a.type} ${a.message} ${a.project_id || ""} ${a.survey_no || ""} ${a.district || ""}`.toLowerCase().includes(query.toLowerCase()));
+  const alertList = Array.isArray(data) ? data : [];
+  const visible = alertList.filter(a => (filter === "All" || (filter === "Unread" ? a.read_status === "Unread" : a.category === filter)) && `${a.type} ${a.message} ${a.project_id || ""} ${a.survey_no || ""} ${a.district || ""}`.toLowerCase().includes(query.toLowerCase()));
   const open = row => { if (row.parcel_id) go({ project_id: row.project_id, parcel_id: row.parcel_id, record_id: row.record_id, survey_no: row.survey_no }); else if (row.project_id) go({ project_id: row.project_id }); };
   return <Panel title={`Operational Alerts · ${dist}`}>
     <div className="toolbar"><input aria-label="Search alerts" placeholder="Search alert, project, parcel, district..." value={query} onChange={e => setQuery(e.target.value)} /><select value={filter} onChange={e => setFilter(e.target.value)}>{["All", "Unread", "Risk", "SLA", "Project", "Grievance", "Verification"].map(x => <option key={x}>{x}</option>)}</select><RefreshButton /></div>
@@ -2796,14 +2799,33 @@ function AnalyticsPage({ district, go }) {
   const dist = district || "Coimbatore";
   const { data, error } = useData(`/analytics/operations?district=${encodeURIComponent(dist)}`, 5000);
   if (error || !data) return <DataPanel title={`Analytics (${dist})`} data={data} error={error} />;
-  const kpis = [["Total Projects", data.projects.total], ["Active Projects", data.projects.active], ["Delayed Projects", data.projects.delayed], ["Completed Projects", data.projects.completed], ["Total Parcels", data.parcels.total], ["Affected Parcels", data.parcels.affected], ["Verified Parcels", data.parcels.verified], ["Pending Verification", data.parcels.pending_verification], ["SLA Due Soon", data.sla.due_soon], ["SLA Breached", data.sla.breached], ["Compensation Pending", data.acquisition.compensation_pending], ["Open Grievances", (data.grievances.by_status.find(x => x.status === "Open") || {}).count || 0]];
+  const projects = data?.projects || {};
+  const parcels = data?.parcels || {};
+  const risk = data?.risk || {};
+  const acquisition = data?.acquisition || {};
+  const sla = data?.sla || {};
+  const grievances = data?.grievances || {};
+  const kpis = [
+    ["Total Projects", projects.total || 0],
+    ["Active Projects", projects.active || 0],
+    ["Delayed Projects", projects.delayed || 0],
+    ["Completed Projects", projects.completed || 0],
+    ["Total Parcels", parcels.total || 0],
+    ["Affected Parcels", parcels.affected || 0],
+    ["Verified Parcels", parcels.verified || 0],
+    ["Pending Verification", parcels.pending_verification || 0],
+    ["SLA Due Soon", sla.due_soon || 0],
+    ["SLA Breached", sla.breached || 0],
+    ["Compensation Pending", acquisition.compensation_pending || 0],
+    ["Open Grievances", (grievances.by_status?.find(x => x.status === "Open") || {}).count || 0]
+  ];
   return <>
     <Panel title={`Operational Analytics · ${dist}`}><div className="toolbar"><RefreshButton /></div><div className="cards">{kpis.map(k => <div className="metric" key={k[0]}><span>{k[0]}</span><b>{k[1]}</b></div>)}</div></Panel>
-    <div className="grid2"><Panel title="Projects by Stage"><Table rows={data.projects.by_stage} cols={["stage", "count"]} /></Panel><Panel title="Projects by District"><Table rows={data.projects.by_district} cols={["district", "count"]} /></Panel></div>
-    <Panel title="Project Risk Detail"><AlertTable rows={data.risk.project_wise.slice(0, 30)} columns={[{key:"project_id",label:"Project ID"},{key:"project_name",label:"Project Name"},{key:"parcels",label:"Parcels"},{key:"high_risk",label:"High / Critical"},{key:"average_risk_score",label:"Average Risk Score"}]} onOpen={r => go({ project_id: r.project_id })} emptyMessage="No project analytics available." /></Panel>
-    <div className="grid2"><Panel title="Parcel Risk Distribution"><Table rows={data.parcels.risk_distribution} cols={["category", "count", "average_score"]} /></Panel><Panel title="Acquisition Stage Distribution"><Table rows={data.acquisition.by_stage} cols={["stage", "count"]} /></Panel></div>
-    <div className="grid2"><Panel title="Compensation / Possession"><Table rows={[{status:"Pending",count:data.acquisition.compensation_pending},{status:"Paid",count:data.acquisition.compensation_completed},...(data.acquisition.possession || [])]} cols={["status", "count"]} /></Panel><Panel title="Rehabilitation / R&R"><Table rows={data.acquisition.rehabilitation} cols={["status", "count"]} /></Panel></div>
-    <div className="grid2"><Panel title="SLA Analytics"><Table rows={[{status:"Due Soon",count:data.sla.due_soon},{status:"Breached",count:data.sla.breached},{status:"Average Delay",count:data.sla.average_delay},{status:"Bottlenecks",count:data.sla.bottlenecks}]} cols={["status", "count"]} /></Panel><Panel title="Grievances"><Table rows={data.grievances.by_status.length ? data.grievances.by_status : [{status:"Total",count:data.grievances.total}]} cols={["status", "count"]} /></Panel></div>
+    <div className="grid2"><Panel title="Projects by Stage"><Table rows={projects.by_stage || []} cols={["stage", "count"]} /></Panel><Panel title="Projects by District"><Table rows={projects.by_district || []} cols={["district", "count"]} /></Panel></div>
+    <Panel title="Project Risk Detail"><AlertTable rows={(risk.project_wise || []).slice(0, 30)} columns={[{key:"project_id",label:"Project ID"},{key:"project_name",label:"Project Name"},{key:"parcels",label:"Parcels"},{key:"high_risk",label:"High / Critical"},{key:"average_risk_score",label:"Average Risk Score"}]} onOpen={r => go({ project_id: r.project_id })} emptyMessage="No project analytics available." /></Panel>
+    <div className="grid2"><Panel title="Parcel Risk Distribution"><Table rows={parcels.risk_distribution || []} cols={["category", "count", "average_score"]} /></Panel><Panel title="Acquisition Stage Distribution"><Table rows={acquisition.by_stage || []} cols={["stage", "count"]} /></Panel></div>
+    <div className="grid2"><Panel title="Compensation / Possession"><Table rows={[{status:"Pending",count:acquisition.compensation_pending || 0},{status:"Paid",count:acquisition.compensation_completed || 0},...(acquisition.possession || [])]} cols={["status", "count"]} /></Panel><Panel title="Rehabilitation / R&R"><Table rows={acquisition.rehabilitation || []} cols={["status", "count"]} /></Panel></div>
+    <div className="grid2"><Panel title="SLA Analytics"><Table rows={[{status:"Due Soon",count:sla.due_soon || 0},{status:"Breached",count:sla.breached || 0},{status:"Average Delay",count:sla.average_delay || "0 days"},{status:"Bottlenecks",count:sla.bottlenecks || 0}]} cols={["status", "count"]} /></Panel><Panel title="Grievances"><Table rows={grievances.by_status?.length ? grievances.by_status : [{status:"Total",count:grievances.total || 0}]} cols={["status", "count"]} /></Panel></div>
   </>;
 }
 
@@ -2882,10 +2904,11 @@ function Bottlenecks({ district, go }) {
 
 function Reports({ district, user }) {
   const dist = district || "Coimbatore";
+  const isCitizen = user?.role === "citizen";
   const { data: d, error: reportErr } = useData(`/reports/?district=${encodeURIComponent(dist)}`);
   
   // Use the new /reports/project-list endpoint instead of the projects endpoint, which is faster.
-  const { data: pl } = useData(`/reports/project-list?district=${encodeURIComponent(dist)}`);
+  const { data: pl } = useData(!isCitizen ? `/reports/project-list?district=${encodeURIComponent(dist)}` : null);
   
   const [selectedProject, setSelectedProject] = useState("");
 
@@ -2929,12 +2952,12 @@ function Reports({ district, user }) {
   }
   if (!d) return <Panel title={`MIS Reports (${dist})`}>Loading...</Panel>;
   
-  const isCitizen = user?.role === "citizen";
   const isStateAuth = user?.role === "state_authority" || user?.role === "admin" || user?.role === "authority";
+  const summary = d?.summary || {};
 
   return (
     <>
-      <Cards d={{ total_projects: d.summary.total_projects, active_projects: d.summary.active_projects, completed_projects: d.summary.completed_projects, delayed_projects: d.summary.delayed_cases, pending_compensation: d.summary.total_pending_compensation }} />
+      <Cards d={{ total_projects: summary.total_projects || 0, active_projects: summary.active_projects || 0, completed_projects: summary.completed_projects || 0, delayed_projects: summary.delayed_cases || 0, pending_compensation: summary.total_pending_compensation || 0 }} />
       
       {!isCitizen && (
         <Panel title={`PDF Reports & Downloads · ${dist}`}>

@@ -78,12 +78,24 @@ def api_projects():
     c.close()
     return {"items": rows}
 
+API_PREFIXES = (
+    "auth", "projects", "land-records", "ml", "dashboard", "gis", "documents",
+    "ocr", "alerts", "audit", "citizen", "field", "analytics", "sla", "reports",
+    "grievances", "compensation", "intelligence", "rr", "sms", "privacy",
+    "data-quality", "dss", "api", "health"
+)
+
 if FRONTEND_DIST.exists():
     if (FRONTEND_DIST / "assets").exists():
         app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        clean_path = full_path.lstrip("/")
+        first_segment = clean_path.split("/")[0] if clean_path else ""
+        if first_segment in API_PREFIXES:
+            return JSONResponse({"detail": f"API route '/{full_path}' not found"}, status_code=404)
+
         file_path = FRONTEND_DIST / full_path
         if full_path and file_path.exists() and file_path.is_file():
             return FileResponse(file_path)

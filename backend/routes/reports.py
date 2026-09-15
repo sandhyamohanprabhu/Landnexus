@@ -5,7 +5,9 @@ from backend.core import conn, current_user, enforce_district_scope, check_resou
 router = APIRouter()
 
 # ─── Existing MIS Reports JSON Endpoint ───
+@router.get("")
 @router.get("/")
+@router.get("/summary")
 def get_reports(district: str = None, authorization: str = Header(None)):
     u = current_user(authorization)
     if u:

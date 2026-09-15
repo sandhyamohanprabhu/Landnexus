@@ -3,6 +3,7 @@ from fastapi import APIRouter, Header, HTTPException
 from backend.core import conn, current_user, enforce_district_scope
 router = APIRouter()
 
+@router.get("")
 @router.get("/")
 def analytics(district: Optional[str] = None, authorization: str = Header(None)):
  u = current_user(authorization)
@@ -20,6 +21,7 @@ def analytics(district: Optional[str] = None, authorization: str = Header(None))
  c.close()
  return {"district_delay": dist_rows, "stage_frequency": stages, "project_type_distribution": types, "average_acquisition_delay_days": avg, "legal_dispute_frequency_pct": legal, "selected_district": district or "All", "policy_observations": ["Data-driven observation: districts are ranked by observed average parcel delay.", "Data-driven observation: stages are ranked by project frequency, not causal proof."], "recommendations": ["AI-generated recommendation: prioritize review of high-delay districts and overdue workflow stages.", "AI-generated recommendation: monitor compensation, legal and documentation backlogs before escalation."]}
 
+@router.get("/risk")
 @router.get("/operations")
 def operations(district: Optional[str] = None, authorization: str = Header(None)):
 	u = current_user(authorization)
