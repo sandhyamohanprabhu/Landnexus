@@ -194,16 +194,22 @@ def get_ocr_details(document_id: str, authorization: str = Header(None)):
         raise HTTPException(401, "Authentication required")
         
     c = conn()
-    d = c.execute("SELECT * FROM documents WHERE document_id=?", (document_id,)).fetchone()
+    d = c.execute("""
+        SELECT d.*, pa.survey_no, pa.owner_name, pa.village, pa.taluk, pa.area, 
+               COALESCE(pa.district, pr.district) as district, pa.record_id as parcel_record_id,
+               pr.project_name
+        FROM documents d
+        LEFT JOIN parcels pa ON d.parcel_id = pa.id
+        LEFT JOIN projects pr ON d.project_id = pr.project_id
+        WHERE d.document_id=?
+    """, (document_id,)).fetchone()
     if not d:
         c.close()
         raise HTTPException(404, "Document not found")
         
     # Check district authorization
-    if d["parcel_id"]:
-        p = c.execute("SELECT district FROM parcels WHERE id=?", (d["parcel_id"],)).fetchone()
-        if p:
-            check_resource_district(u, p["district"], "Document OCR Record")
+    if d["district"]:
+        check_resource_district(u, d["district"], "Document OCR Record")
 
     extractions = c.execute("SELECT * FROM ocr_extractions WHERE document_id=?", (document_id,)).fetchall()
     c.close()
@@ -212,7 +218,15 @@ def get_ocr_details(document_id: str, authorization: str = Header(None)):
         "document_id": document_id,
         "document_name": d["document_name"],
         "project_id": d["project_id"],
+        "project_name": d["project_name"],
         "parcel_id": d["parcel_id"],
+        "survey_no": d["survey_no"],
+        "owner_name": d["owner_name"],
+        "village": d["village"],
+        "taluk": d["taluk"],
+        "district": d["district"],
+        "area": d["area"],
+        "parcel_record_id": d["parcel_record_id"],
         "ocr_status": d["ocr_status"],
         "verification_status": d["verification_status"],
         "ocr_confidence": d["ocr_confidence"],
@@ -223,6 +237,7 @@ def get_ocr_details(document_id: str, authorization: str = Header(None)):
         "preprocessed_image": d["processed_path"],
         "duplicate_flag": bool(d["duplicate_flag"]),
         "rejection_reason": d["rejection_reason"],
+        "remarks": d["remarks"],
         "extractions": [dict(e) for e in extractions]
     }
 

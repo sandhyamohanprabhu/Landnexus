@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, API_BASE_URL, EventBus } from "./api";
-import { useData, Panel, Table, ActionButton } from "./App";
+import { useData, Panel, Table, ActionButton, RefreshButton } from "./App";
 
 const PURPOSES = [
   { code: "land_acquisition_processing", label: "Land Acquisition Processing" },
@@ -28,6 +28,11 @@ export default function DocumentsPage({ user, selected, district }) {
   const [selectedLanguage, setSelectedLanguage] = useState("auto");
   const [processingMode, setProcessingMode] = useState("auto");
   const [runningOcr, setRunningOcr] = useState(false);
+
+  // Search & Filter state for document vault
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [langFilter, setLangFilter] = useState("ALL");
 
   // Fetch documents for the project, parcel, or district scoped cleanly to user permissions
   const dist = user?.district_scope || district || (user?.state_scope === "Kerala" ? "Palakkad" : (user?.role === "national_authority" || user?.role === "admin" ? "all" : "Coimbatore"));
@@ -298,27 +303,144 @@ export default function DocumentsPage({ user, selected, district }) {
       </Panel>
 
       <Panel title="Land Document History & Intelligence Vault">
-        <div className="toolbar"><RefreshButton /></div>
-        {fetchError && <div className="error">{fetchError.message}</div>}
-        <Table rows={documents || []} cols={["document_id", "document_name", "project_id", "parcel_id", "created_at", "language", "ocr_status", "verification_status"]} actions={(r) => (
-          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-            <button
-              style={{ padding: "4px 8px", fontSize: "11px", background: "#0f766e", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}
-              onClick={() => { setDocId(r.document_id); setActiveTab("ocr"); }}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: "8px", flex: 1, minWidth: "280px", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              placeholder="🔍 Search by Doc ID, Survey No, Owner, Village..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{ flex: 1, minWidth: "180px", padding: "6px 10px", fontSize: "12px", borderRadius: "4px", border: "1px solid #cbd5e1" }}
+            />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={{ padding: "6px 10px", fontSize: "12px", borderRadius: "4px", border: "1px solid #cbd5e1" }}
             >
-              OCR View
-            </button>
-            <button
-              style={{ padding: "4px 8px", fontSize: "11px", background: "#1e293b", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}
-              onClick={() => openPrivacy(r.document_id)}
+              <option value="ALL">All OCR Statuses</option>
+              <option value="Verified">Verified</option>
+              <option value="Verification Required">Verification Required</option>
+              <option value="Pending">Pending</option>
+              <option value="Rejected">Rejected</option>
+              <option value="Not Started">Not Started</option>
+              <option value="Failed">Failed</option>
+            </select>
+            <select
+              value={langFilter}
+              onChange={(e) => setLangFilter(e.target.value)}
+              style={{ padding: "6px 10px", fontSize: "12px", borderRadius: "4px", border: "1px solid #cbd5e1" }}
             >
-              🔐 Privacy Guard
-            </button>
-            {(r.ocr_status === "Not Started" || r.ocr_status === "Failed") && (
-              <ActionButton label={runningOcr ? "Running..." : "Run OCR"} onClick={() => startOCR(r.document_id)} />
-            )}
+              <option value="ALL">All Languages</option>
+              <option value="ta">Tamil (தமிழ்)</option>
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="mr">Marathi (मराठी)</option>
+              <option value="te">Telugu (తెలుగు)</option>
+              <option value="kn">Kannada (ಕನ್ನಡ)</option>
+              <option value="ml">Malayalam (മലയാളം)</option>
+              <option value="bn">Bengali (বাংলা)</option>
+              <option value="gu">Gujarati (ગુજરાતી)</option>
+              <option value="pa">Punjabi (ਪੰਜਾਬੀ)</option>
+              <option value="en">English</option>
+            </select>
           </div>
-        )} />
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 600 }}>
+              {(() => {
+                const docList = Array.isArray(documents) ? documents : [];
+                const filtered = docList.filter(d => {
+                  if (statusFilter !== "ALL" && d.ocr_status !== statusFilter && d.verification_status !== statusFilter) return false;
+                  if (langFilter !== "ALL" && (d.language || "en").toLowerCase() !== langFilter.toLowerCase()) return false;
+                  if (searchTerm) {
+                    const term = searchTerm.toLowerCase();
+                    const match = (
+                      (d.document_id && String(d.document_id).toLowerCase().includes(term)) ||
+                      (d.document_name && String(d.document_name).toLowerCase().includes(term)) ||
+                      (d.survey_no && String(d.survey_no).toLowerCase().includes(term)) ||
+                      (d.owner_name && String(d.owner_name).toLowerCase().includes(term)) ||
+                      (d.village && String(d.village).toLowerCase().includes(term)) ||
+                      (d.taluk && String(d.taluk).toLowerCase().includes(term)) ||
+                      (d.district && String(d.district).toLowerCase().includes(term)) ||
+                      (d.parcel_id && String(d.parcel_id).toLowerCase().includes(term)) ||
+                      (d.project_id && String(d.project_id).toLowerCase().includes(term))
+                    );
+                    if (!match) return false;
+                  }
+                  return true;
+                });
+                return `${filtered.length} / ${docList.length} records`;
+              })()}
+            </span>
+            <RefreshButton />
+          </div>
+        </div>
+
+        {fetchError && <div className="error">{fetchError.message}</div>}
+
+        {(() => {
+          const docList = Array.isArray(documents) ? documents : [];
+          const filtered = docList.filter(d => {
+            if (statusFilter !== "ALL" && d.ocr_status !== statusFilter && d.verification_status !== statusFilter) return false;
+            if (langFilter !== "ALL" && (d.language || "en").toLowerCase() !== langFilter.toLowerCase()) return false;
+            if (searchTerm) {
+              const term = searchTerm.toLowerCase();
+              const match = (
+                (d.document_id && String(d.document_id).toLowerCase().includes(term)) ||
+                (d.document_name && String(d.document_name).toLowerCase().includes(term)) ||
+                (d.survey_no && String(d.survey_no).toLowerCase().includes(term)) ||
+                (d.owner_name && String(d.owner_name).toLowerCase().includes(term)) ||
+                (d.village && String(d.village).toLowerCase().includes(term)) ||
+                (d.taluk && String(d.taluk).toLowerCase().includes(term)) ||
+                (d.district && String(d.district).toLowerCase().includes(term)) ||
+                (d.parcel_id && String(d.parcel_id).toLowerCase().includes(term)) ||
+                (d.project_id && String(d.project_id).toLowerCase().includes(term))
+              );
+              if (!match) return false;
+            }
+            return true;
+          });
+
+          if (docList.length === 0 && !fetchError) {
+            return (
+              <div style={{ padding: "30px 20px", textAlign: "center", background: "#f8fafc", borderRadius: "6px", border: "1px dashed #cbd5e1", color: "#64748b", fontSize: "13px" }}>
+                ℹ️ No OCR / document records are available for the selected district ({dist}). You can upload a new land record above.
+              </div>
+            );
+          }
+
+          if (docList.length > 0 && filtered.length === 0) {
+            return (
+              <div style={{ padding: "20px", textAlign: "center", background: "#f8fafc", borderRadius: "6px", color: "#94a3b8", fontSize: "12px" }}>
+                No documents match the filter criteria "{searchTerm || statusFilter}".
+              </div>
+            );
+          }
+
+          return (
+            <Table
+              rows={filtered}
+              cols={["document_id", "document_name", "survey_no", "owner_name", "village", "district", "language", "ocr_status", "verification_status"]}
+              actions={(r) => (
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                  <button
+                    style={{ padding: "4px 8px", fontSize: "11px", background: "#0f766e", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}
+                    onClick={() => { setDocId(r.document_id); setActiveTab("ocr"); }}
+                  >
+                    OCR View
+                  </button>
+                  <button
+                    style={{ padding: "4px 8px", fontSize: "11px", background: "#1e293b", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: 600 }}
+                    onClick={() => openPrivacy(r.document_id)}
+                  >
+                    🔐 Privacy Guard
+                  </button>
+                  {(r.ocr_status === "Not Started" || r.ocr_status === "Failed") && (
+                    <ActionButton label={runningOcr ? "Running..." : "Run OCR"} onClick={() => startOCR(r.document_id)} />
+                  )}
+                </div>
+              )}
+            />
+          );
+        })()}
       </Panel>
     </>
   );
@@ -480,6 +602,32 @@ function OCRVerificationPanel({ documentId, onClose, user, onProceedPrivacy, sel
           </div>
         )}
       </div>
+
+      {/* Linked Parcel & Land Metadata Ribbon */}
+      {(ocrData.survey_no || ocrData.owner_name || ocrData.village || ocrData.parcel_id) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "10px", background: "#f1f5f9", padding: "10px 14px", borderRadius: "6px", marginBottom: "14px", fontSize: "11px", border: "1px solid #e2e8f0" }}>
+          <div>
+            <span style={{ color: "#64748b", fontWeight: 600 }}>Survey Number:</span>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginTop: "2px" }}>{ocrData.survey_no || "N/A"}</div>
+          </div>
+          <div>
+            <span style={{ color: "#64748b", fontWeight: 600 }}>Owner / Pattadar:</span>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginTop: "2px" }}>{ocrData.owner_name || "N/A"}</div>
+          </div>
+          <div>
+            <span style={{ color: "#64748b", fontWeight: 600 }}>Village / Taluk:</span>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginTop: "2px" }}>{ocrData.village || "N/A"}{ocrData.taluk ? ` (${ocrData.taluk})` : ""}</div>
+          </div>
+          <div>
+            <span style={{ color: "#64748b", fontWeight: 600 }}>District:</span>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginTop: "2px" }}>{ocrData.district || "N/A"}</div>
+          </div>
+          <div>
+            <span style={{ color: "#64748b", fontWeight: 600 }}>Project / Record ID:</span>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginTop: "2px" }}>{ocrData.project_name || ocrData.parcel_record_id || ocrData.project_id || "N/A"}</div>
+          </div>
+        </div>
+      )}
 
       {/* Side-by-Side Verification Workspace */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: "16px", minHeight: "420px" }}>

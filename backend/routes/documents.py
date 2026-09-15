@@ -8,7 +8,7 @@ router = APIRouter()
 
 @router.get("")
 @router.get("/")
-def docs(authorization: str = Header(None), parcel_id: int = None, project_id: str = None, district: str = None):
+def docs(authorization: str = Header(None), parcel_id: int = None, project_id: str = None, district: str = None, search: str = None):
     u = current_user(authorization)
     if not u: raise HTTPException(401, "Authentication required")
 
@@ -16,9 +16,10 @@ def docs(authorization: str = Header(None), parcel_id: int = None, project_id: s
     if u.get("role") == "citizen":
         c = conn()
         rows = [dict(x) for x in c.execute("""
-            SELECT d.*, p.survey_no, p.village, p.district
+            SELECT d.*, p.survey_no, p.owner_name, p.village, p.taluk, p.district, p.area, p.record_id as parcel_record_id, pr.project_name
             FROM documents d
             LEFT JOIN parcels p ON p.id = d.parcel_id
+            LEFT JOIN projects pr ON pr.project_id = d.project_id
             WHERE lower(p.owner_reference) = lower(?) OR lower(d.uploaded_by) = lower(?)
             ORDER BY d.id DESC
         """, (u["email"], u["email"])).fetchall()]
@@ -27,24 +28,47 @@ def docs(authorization: str = Header(None), parcel_id: int = None, project_id: s
 
     district = enforce_district_scope(u, district)
     c = conn()
+    
+    base_query = """
+        SELECT d.*, pa.survey_no, pa.owner_name, pa.village, pa.taluk, 
+               COALESCE(pa.district, pr.district) as district, pa.area, 
+               pa.record_id as parcel_record_id, pr.project_name
+        FROM documents d
+        LEFT JOIN projects pr ON d.project_id = pr.project_id
+        LEFT JOIN parcels pa ON d.parcel_id = pa.id
+        WHERE 1=1
+    """
+    params = []
+    
     if parcel_id:
         p = c.execute("SELECT district FROM parcels WHERE id=?", (parcel_id,)).fetchone()
         if p: check_resource_district(u, p["district"], "Parcel Documents")
-        rows = [dict(x) for x in c.execute("SELECT * FROM documents WHERE parcel_id=? ORDER BY id DESC", (parcel_id,)).fetchall()]
+        base_query += " AND d.parcel_id = ?"
+        params.append(parcel_id)
     elif project_id:
         pr = c.execute("SELECT district FROM projects WHERE project_id=?", (project_id,)).fetchone()
         if pr: check_resource_district(u, pr["district"], "Project Documents")
-        rows = [dict(x) for x in c.execute("SELECT * FROM documents WHERE project_id=? ORDER BY id DESC", (project_id,)).fetchall()]
+        base_query += " AND d.project_id = ?"
+        params.append(project_id)
     elif district and district.lower() != "all":
-        rows = [dict(x) for x in c.execute("""
-            SELECT d.* FROM documents d
-            LEFT JOIN projects pr ON d.project_id=pr.project_id
-            LEFT JOIN parcels pa ON d.parcel_id=pa.id
-            WHERE lower(pr.district)=lower(?) OR lower(pa.district)=lower(?)
-            ORDER BY d.id DESC LIMIT 500
-        """, (district.strip(), district.strip())).fetchall()]
-    else:
-        rows = [dict(x) for x in c.execute("SELECT * FROM documents ORDER BY id DESC LIMIT 500").fetchall()]
+        base_query += " AND (lower(pr.district) = lower(?) OR lower(pa.district) = lower(?))"
+        params.extend([district.strip(), district.strip()])
+
+    if search:
+        s_term = f"%{search.strip().lower()}%"
+        base_query += """ AND (
+            lower(d.document_id) LIKE ? OR
+            lower(d.document_name) LIKE ? OR
+            lower(COALESCE(pa.survey_no, '')) LIKE ? OR
+            lower(COALESCE(pa.owner_name, '')) LIKE ? OR
+            lower(COALESCE(pa.village, '')) LIKE ? OR
+            lower(COALESCE(pa.taluk, '')) LIKE ? OR
+            lower(COALESCE(pr.project_name, '')) LIKE ?
+        )"""
+        params.extend([s_term, s_term, s_term, s_term, s_term, s_term, s_term])
+        
+    base_query += " ORDER BY d.id DESC LIMIT 500"
+    rows = [dict(x) for x in c.execute(base_query, tuple(params)).fetchall()]
     c.close()
     return rows
 
