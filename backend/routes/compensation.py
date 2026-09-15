@@ -17,8 +17,8 @@ def _rows(c, where="", args=()):
 @router.get("/all")
 def all_compensation(district: str = None, authorization: str = Header(None)):
     u = current_user(authorization)
-    if not u or u["role"] not in ("district_authority", "authority", "admin"):
-        raise HTTPException(403, "District Officer access required")
+    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer", "state_authority", "national_authority", "field_officer"):
+        raise HTTPException(403, "Compensation directory access required")
     district = enforce_district_scope(u, district)
     c = conn()
     if district and district.lower() != "all":
@@ -31,13 +31,17 @@ def all_compensation(district: str = None, authorization: str = Header(None)):
 @router.get("/project/{project_id}")
 def project_compensation(project_id: str, authorization: str = Header(None)):
     u = current_user(authorization)
-    if not u or u["role"] not in ("district_authority", "authority", "admin"):
-        raise HTTPException(403, "District Officer access required")
+    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer", "state_authority", "national_authority", "field_officer", "citizen"):
+        raise HTTPException(403, "Project compensation access required")
     c = conn()
     proj = c.execute("SELECT district FROM projects WHERE project_id=?", (project_id,)).fetchone()
     if proj:
         check_resource_district(u, proj["district"], "Project")
-    rows = _rows(c, " WHERE c.project_id=? AND c.status != 'Paid'", (project_id,))
+    
+    if u["role"] == "citizen":
+        rows = _rows(c, " WHERE c.project_id=? AND lower(p.owner_reference)=lower(?)", (project_id, u["email"]))
+    else:
+        rows = _rows(c, " WHERE c.project_id=? AND c.status != 'Paid'", (project_id,))
     c.close()
     return rows
 
@@ -52,8 +56,8 @@ def my_compensation(authorization: str = Header(None)):
 @router.post("/project/{project_id}/parcel/{parcel_id}/pay")
 def pay(project_id: str, parcel_id: int, authorization: str = Header(None)):
     u = current_user(authorization)
-    if not u or u["role"] != "district_authority":
-        raise HTTPException(403, "District Officer access required")
+    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer", "national_authority"):
+        raise HTTPException(403, "Officer payment authorization required")
     c = conn()
     row = c.execute("""SELECT c.*,p.survey_no,p.village,p.owner_reference,p.district
         FROM compensation c JOIN parcels p ON p.id=c.parcel_id

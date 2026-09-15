@@ -1444,11 +1444,26 @@ function UnassignedParcelPool({ project, onClose }) {
   );
 }
 
-function Workflow({ selected, go, user, district }) {
-  const { data: projectDetails, error } = useData(selected ? `/projects/${selected.project_id}` : null, 5000);
-  const { data: compensation, error: compensationError } = useData(selected ? `/compensation/project/${selected.project_id}` : null, 5000);
-  const canExecute = ["district_authority", "authority", "admin", "acquisition_officer", "state_authority"].includes(user?.role);
-  const { data: officers } = useData(canExecute && selected ? `/field/officers${district ? `?district=${encodeURIComponent(district)}` : ""}` : null);
+function Workflow({ selected, go, user, district, onSelectProject }) {
+  const dist = user?.district_scope || district || (user?.state_scope === "Kerala" ? "Palakkad" : (user?.role === "national_authority" || user?.role === "admin" ? "all" : "Coimbatore"));
+  const { data: projectList, error: projectListError } = useData(`/projects/?district=${encodeURIComponent(dist)}&limit=100`, 5000);
+  
+  const [activeProjectId, setActiveProjectId] = useState(selected?.project_id || "");
+
+  useEffect(() => {
+    if (selected?.project_id) {
+      setActiveProjectId(selected.project_id);
+    } else if (!activeProjectId && projectList?.items?.length) {
+      setActiveProjectId(projectList.items[0].project_id);
+    }
+  }, [selected, projectList, activeProjectId]);
+
+  const effectiveProjectId = activeProjectId || selected?.project_id || (projectList?.items?.length ? projectList.items[0].project_id : "");
+
+  const { data: projectDetails, error } = useData(effectiveProjectId ? `/projects/${encodeURIComponent(effectiveProjectId)}` : null, 5000);
+  const { data: compensation, error: compensationError } = useData(effectiveProjectId ? `/compensation/project/${encodeURIComponent(effectiveProjectId)}` : null, 5000);
+  const canExecute = ["district_authority", "authority", "admin", "acquisition_officer", "state_authority", "national_authority"].includes(user?.role);
+  const { data: officers } = useData(canExecute && effectiveProjectId ? `/field/officers${dist && dist !== "all" ? `?district=${encodeURIComponent(dist)}` : ""}` : null);
   const [survey, setSurvey] = useState("");
   const [subdivision, setSubdivision] = useState("");
   const [village, setVillage] = useState("");
@@ -1462,17 +1477,79 @@ function Workflow({ selected, go, user, district }) {
   const [showPool, setShowPool] = useState(false);
   const { data: searchResults, error: searchError } = useData(searchPath);
 
-  if (!selected) return <Placeholder title="Workflow" />;
-  if (error) return <Panel title="Project Details"><p className="error">Unable to load project details ({error.status || "network error"}): {error.message}</p></Panel>;
-  if (!projectDetails) return <Panel title="Project Details"><p>Loading project details...</p></Panel>;
-  const lifecycle = [{ internal: "Proposal", label: "Proposal" }, { internal: "SIA / Survey", label: "SIA / Survey" }, { internal: "Notification", label: "Notification" }, { internal: "Legal Dispute / Resolution", label: "Objections" }, { internal: "Approval", label: "Approval" }, { internal: "Award", label: "Award" }, { internal: "Compensation", label: "Compensation" }, { internal: "Possession", label: "Possession" }, { internal: "Rehabilitation", label: "Rehabilitation" }, { internal: "Closure / Completion", label: "Completed" }];
+  if (!effectiveProjectId) {
+    return (
+      <Panel title={`Acquisition Workflow Projects · ${dist}`}>
+        <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <p style={{ margin: 0, color: "#64748b", fontSize: "13px" }}>
+            Select an acquisition project to track its statutory lifecycle, land parcel linkages, and compensation progress.
+          </p>
+          <RefreshButton />
+        </div>
+        {projectListError && <div className="error">{projectListError.message}</div>}
+        {projectList?.items && projectList.items.length > 0 ? (
+          <Table
+            rows={projectList.items}
+            cols={["project_id", "project_name", "district", "taluk", "current_stage", "project_status", "progress"]}
+            actions={r => (
+              <button
+                type="button"
+                style={{ padding: "4px 8px", background: "#0f6c70", color: "#fff", border: "none", borderRadius: "4px", fontWeight: 600, cursor: "pointer", fontSize: "11px" }}
+                onClick={() => {
+                  setActiveProjectId(r.project_id);
+                  if (onSelectProject) onSelectProject(r);
+                }}
+              >
+                Open Workflow
+              </button>
+            )}
+          />
+        ) : (
+          <div className="empty">No acquisition projects registered in this jurisdiction.</div>
+        )}
+      </Panel>
+    );
+  }
+
+  if (error) return (
+    <Panel title={`Project Details · ${effectiveProjectId}`}>
+      <p className="error">Unable to load project details ({error.status || "network error"}): {error.message}</p>
+      <RefreshButton />
+    </Panel>
+  );
+
+  if (!projectDetails) return (
+    <Panel title={`Project Details · ${effectiveProjectId}`}>
+      <p>Loading project details...</p>
+    </Panel>
+  );
+
+  const lifecycle = [
+    { internal: "Proposal", label: "Proposal" },
+    { internal: "SIA / Survey", label: "SIA / Survey" },
+    { internal: "Notification", label: "Notification" },
+    { internal: "Legal Dispute / Resolution", label: "Objections" },
+    { internal: "Approval", label: "Approval" },
+    { internal: "Award", label: "Award" },
+    { internal: "Compensation", label: "Compensation" },
+    { internal: "Possession", label: "Possession" },
+    { internal: "Rehabilitation", label: "Rehabilitation" },
+    { internal: "Closure / Completion", label: "Completed" }
+  ];
   const normalizedStage = { Survey: "SIA / Survey", "Rehabilitation & Resettlement": "Rehabilitation" }[projectDetails.current_stage] || projectDetails.current_stage;
   const currentIndex = lifecycle.findIndex(s => s.internal === normalizedStage);
   const nextStage = currentIndex >= 0 ? lifecycle[currentIndex + 1] : null;
+
   const transition = async () => {
     if (!nextStage || !window.confirm(`Move ${projectDetails.project_id} to ${nextStage.label}?`)) return;
-    await api(`/projects/${encodeURIComponent(projectDetails.project_id)}/workflow/transition`, { method: "POST", body: JSON.stringify({ next_stage: nextStage.internal }) });
+    try {
+      await api(`/projects/${encodeURIComponent(projectDetails.project_id)}/workflow/transition`, { method: "POST", body: JSON.stringify({ next_stage: nextStage.internal }) });
+      EventBus.dispatch();
+    } catch (err) {
+      alert("Workflow transition failed: " + err.message);
+    }
   };
+
   const search = e => {
     e.preventDefault();
     const parts = survey.trim().split("/");
@@ -1486,12 +1563,14 @@ function Workflow({ selected, go, user, district }) {
     if (districtFilter.trim()) params.set("district", districtFilter.trim());
     setSearchPath(`/land-records/?${params.toString()}`);
   };
+
   const linkSelected = async () => {
     if (!selectedParcel) return;
     await api(`/projects/${encodeURIComponent(projectDetails.project_id)}/parcels/${selectedParcel.id}`, { method: "POST" });
     setSelectedParcel(null); setSearchPath(null);
     EventBus.dispatch();
   };
+
   const assign = async parcel => {
     if (!officer) { setAssignError("Please select a field officer first."); return; }
     setAssignError("");
@@ -1503,6 +1582,7 @@ function Workflow({ selected, go, user, district }) {
       setAssignError(`Assignment failed for parcel ${parcel.survey_no || parcel.id}: ${err.message}`);
     }
   };
+
   const unassign = async (parcel) => {
     if (!window.confirm(`Release parcel ${parcel.survey_no || parcel.id} back to the unassigned pool?`)) return;
     try {
@@ -1525,8 +1605,33 @@ function Workflow({ selected, go, user, district }) {
 
   return (
     <>
-      <Panel title={`Project Details: ${projectDetails.project_id} - ${projectDetails.project_name}`}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px", marginBottom: "20px", padding: "15px", background: "#f8f9fa", borderRadius: "8px" }}>
+      <Panel title={`Project Acquisition Workflow: ${projectDetails.project_id} - ${projectDetails.project_name}`}>
+        {/* Project Selector Bar */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "10px", paddingBottom: "10px", borderBottom: "1px solid #e2e8f0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Active Project:</span>
+            <select
+              value={effectiveProjectId}
+              onChange={e => {
+                setActiveProjectId(e.target.value);
+                if (onSelectProject) {
+                  const found = projectList?.items?.find(p => p.project_id === e.target.value);
+                  onSelectProject(found || { project_id: e.target.value });
+                }
+              }}
+              style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: 700, fontSize: "12px", color: "#0f6c70", background: "#fff" }}
+            >
+              {(projectList?.items || []).map(p => (
+                <option key={p.project_id} value={p.project_id}>
+                  {p.project_id} · {p.project_name} ({p.current_stage || "Proposal"})
+                </option>
+              ))}
+            </select>
+          </div>
+          <RefreshButton />
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", marginBottom: "20px", padding: "15px", background: "#f8f9fa", borderRadius: "8px" }}>
           <div><b>Project ID:</b> {projectDetails.project_id}</div><div><b>Project Name:</b> {projectDetails.project_name}</div>
           <div><b>District:</b> {projectDetails.district || "N/A"}</div><div><b>Taluk:</b> {projectDetails.taluk || "N/A"}</div>
           <div><b>Village:</b> {projectDetails.village || "N/A"}</div><div><b>Stage:</b> {projectDetails.current_stage}</div>
@@ -2332,20 +2437,170 @@ function ML() {
   );
 }
 
-function SLA({ selected }) {
-  const { data: d } = useData("/sla/timeline/" + (selected?.project_id || "none"), 5000);
-  if (!selected?.project_id) return <Placeholder title="SLA & Timeline" />;
+function SLA({ selected, district, user, go, onSelectProject }) {
+  const dist = user?.district_scope || district || (user?.state_scope === "Kerala" ? "Palakkad" : (user?.role === "national_authority" || user?.role === "admin" ? "all" : "Coimbatore"));
+  const { data: opsData, error: opsError } = useData(`/sla/operations?district=${encodeURIComponent(dist)}`, 5000);
+  const { data: projectList } = useData(`/projects/?district=${encodeURIComponent(dist)}&limit=100`, 5000);
+  
+  const [activeProjectId, setActiveProjectId] = useState(selected?.project_id || "");
+
+  useEffect(() => {
+    if (selected?.project_id) {
+      setActiveProjectId(selected.project_id);
+    } else if (!activeProjectId && projectList?.items?.length) {
+      setActiveProjectId(projectList.items[0].project_id);
+    }
+  }, [selected, projectList, activeProjectId]);
+
+  const effectiveProjectId = activeProjectId || selected?.project_id || (projectList?.items?.length ? projectList.items[0].project_id : "");
+  const { data: timelineData, error: timelineError } = useData(effectiveProjectId ? `/sla/timeline/${encodeURIComponent(effectiveProjectId)}` : null, 5000);
+
+  const bottlenecks = opsData?.process_bottlenecks || [];
+  const slaDueSoon = opsData?.sla_due_soon || [];
+  const slaBreached = opsData?.sla_breached || [];
+  const riskAlerts = opsData?.risk_alerts || [];
+
   return (
-    <Panel title={`SLA & Timeline · ${selected.project_id}`}>
-      <div className="timeline">
-        {(d || []).map(m => (
-          <div className="stage" key={m.stage}>
-            <b>{m.stage}</b><span>{m.status}</span>
-            <small>Started: {m.planned_date || 'N/A'} · Actual: {m.actual_date || 'N/A'}<br />Delay: {m.delay_days || 0} days</small>
+    <>
+      {/* KPI Cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "16px" }}>
+        <div style={{ background: "#ffffff", padding: "14px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Process Bottlenecks</div>
+          <div style={{ fontSize: "22px", fontWeight: 800, color: bottlenecks.length > 0 ? "#b45309" : "#0f6c70", marginTop: "4px" }}>
+            {bottlenecks.length}
           </div>
-        ))}
+          <div style={{ fontSize: "11px", color: "#94a3b8" }}>Active delayed stages</div>
+        </div>
+        <div style={{ background: "#ffffff", padding: "14px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>SLA Due Soon</div>
+          <div style={{ fontSize: "22px", fontWeight: 800, color: "#d97706", marginTop: "4px" }}>
+            {slaDueSoon.length}
+          </div>
+          <div style={{ fontSize: "11px", color: "#94a3b8" }}>Due within 7 days</div>
+        </div>
+        <div style={{ background: "#ffffff", padding: "14px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>SLA Breached</div>
+          <div style={{ fontSize: "22px", fontWeight: 800, color: slaBreached.length > 0 ? "#dc2626" : "#16a34a", marginTop: "4px" }}>
+            {slaBreached.length}
+          </div>
+          <div style={{ fontSize: "11px", color: "#94a3b8" }}>Overdue milestones</div>
+        </div>
+        <div style={{ background: "#ffffff", padding: "14px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>High Risk Parcels</div>
+          <div style={{ fontSize: "22px", fontWeight: 800, color: "#dc2626", marginTop: "4px" }}>
+            {riskAlerts.length}
+          </div>
+          <div style={{ fontSize: "11px", color: "#94a3b8" }}>Requiring intervention</div>
+        </div>
       </div>
-    </Panel>
+
+      {/* Project Timeline Panel */}
+      <Panel title={`📅 Project Acquisition SLA & Milestone Timeline · ${effectiveProjectId || dist}`}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Select Project:</span>
+            <select
+              value={effectiveProjectId}
+              onChange={e => {
+                setActiveProjectId(e.target.value);
+                if (onSelectProject) {
+                  const found = projectList?.items?.find(p => p.project_id === e.target.value);
+                  onSelectProject(found || { project_id: e.target.value });
+                }
+              }}
+              style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: 700, fontSize: "12px", color: "#0f6c70", background: "#fff" }}
+            >
+              {(projectList?.items || []).map(p => (
+                <option key={p.project_id} value={p.project_id}>
+                  {p.project_id} · {p.project_name} ({p.current_stage || "Proposal"})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            {effectiveProjectId && go && (
+              <button
+                type="button"
+                onClick={() => go({ project_id: effectiveProjectId })}
+                style={{ padding: "6px 12px", background: "#0f6c70", color: "#fff", border: "none", borderRadius: "6px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}
+              >
+                Open Acquisition Workflow →
+              </button>
+            )}
+            <RefreshButton />
+          </div>
+        </div>
+
+        {timelineError && <div className="error">Error loading timeline: {timelineError.message}</div>}
+        {timelineData && timelineData.length > 0 ? (
+          <div className="timeline">
+            {timelineData.map(m => {
+              const isOverdue = (m.delay_days || 0) > 0 || m.status === "Delayed";
+              const isCompleted = m.status === "Completed";
+              const isInProgress = m.status === "In Progress";
+              return (
+                <div className="stage" key={m.stage || m.id} style={{ borderLeftColor: isCompleted ? "#16a34a" : isInProgress ? "#0f6c70" : isOverdue ? "#dc2626" : "#cbd5e1" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <b>{m.stage}</b>
+                    <span style={{
+                      padding: "2px 8px", borderRadius: "12px", fontSize: "11px", fontWeight: 700,
+                      background: isCompleted ? "#f0fdf4" : isInProgress ? "#f0fdfa" : isOverdue ? "#fef2f2" : "#f1f5f9",
+                      color: isCompleted ? "#166534" : isInProgress ? "#0f6c70" : isOverdue ? "#991b1b" : "#475569"
+                    }}>
+                      {m.status || "Pending"}
+                    </span>
+                  </div>
+                  <small>
+                    Started: {m.planned_date || 'N/A'} · Actual: {m.actual_date || 'N/A'}<br />
+                    Expected: {m.expected_date || 'N/A'} · Delay: <b style={{ color: (m.delay_days || 0) > 0 ? "#dc2626" : "#166534" }}>{m.delay_days || 0} days</b>
+                    {m.responsible_officer && <span> · Officer: {m.responsible_officer}</span>}
+                  </small>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty">No milestone timeline recorded for this project.</div>
+        )}
+      </Panel>
+
+      {/* Operational SLA Breaches and Delays Grid */}
+      <div className="grid2">
+        <Panel title={`⚠️ SLA Breaches & Delays (${slaBreached.length})`}>
+          {slaBreached.length > 0 ? (
+            <Table
+              rows={slaBreached}
+              cols={["project_id", "project_name", "current_stage", "days_overdue", "responsible_officer"]}
+              onClick={r => { if (go) go(r); }}
+            />
+          ) : (
+            <div className="empty">No active SLA breaches recorded in this district.</div>
+          )}
+        </Panel>
+
+        <Panel title={`⏳ Milestones Due Soon (${slaDueSoon.length})`}>
+          {slaDueSoon.length > 0 ? (
+            <Table
+              rows={slaDueSoon}
+              cols={["project_id", "project_name", "current_stage", "days_remaining", "responsible_officer"]}
+              onClick={r => { if (go) go(r); }}
+            />
+          ) : (
+            <div className="empty">No milestones due within the next 7 days in this district.</div>
+          )}
+        </Panel>
+      </div>
+
+      {bottlenecks.length > 0 && (
+        <Panel title={`🚧 Active Bottlenecks & Delayed Stages (${bottlenecks.length})`}>
+          <Table
+            rows={bottlenecks}
+            cols={["project_id", "project_name", "district", "current_stage", "delay_days", "time_label", "responsible_officer"]}
+            onClick={r => { if (go) go(r); }}
+          />
+        </Panel>
+      )}
+    </>
   );
 }
 
@@ -8802,7 +9057,7 @@ function App() {
   );
   else if (page === "ml") content = <ML />;
   else if (page === "citizen_dash") content = <CitizenDash lang={lang} user={user} />;
-  else if (page === "workflow") content = <Workflow selected={selected} user={user} district={selectedDistrict} go={x => { setSelected(x); setPage(x.parcel_id ? "parcel_details" : "workflow"); }} />;
+  else if (page === "workflow") content = <Workflow selected={selected} user={user} district={selectedDistrict} go={x => { setSelected(x); setPage(x.parcel_id ? "parcel_details" : "workflow"); }} onSelectProject={p => setSelected(p)} />;
   else if (page === "parcel_details") content = (
     <ParcelDetails 
       selected={selected} 
@@ -8813,7 +9068,7 @@ function App() {
       onNavigateGIS={p => { setSelected(p); setPage("gis"); }} 
     />
   );
-  else if (page === "sla") content = <SLA selected={selected} />;
+  else if (page === "sla") content = <SLA selected={selected} user={user} district={selectedDistrict} go={x => { setSelected(x); setPage("workflow"); }} onSelectProject={p => setSelected(p)} />;
   else if (page === "bottlenecks") content = <Bottlenecks district={selectedDistrict} go={x => { setSelected(x); setPage("workflow"); }} />;
   else if (page === "risk") content = <RiskIntelligence district={selectedDistrict} go={x => { setSelected(x); setPage(x.parcel_id ? "parcel_details" : "workflow"); }} />;
   else if (page === "alerts") content = <AlertsPage district={selectedDistrict} go={x => { setSelected(x); setPage(x.parcel_id ? "parcel_details" : "workflow"); }} />;
@@ -8830,10 +9085,10 @@ function App() {
 
   const allowedNav = nav.filter(n => {
     if (!user || !user.role) return true;
-    if (user.role === "citizen") return ["citizen_dash", "grievances"].includes(n[0]);
+    if (user.role === "citizen") return ["citizen_dash", "workflow", "sla", "documents", "grievances"].includes(n[0]);
     if (user.role === "state_authority") return !["citizen_dash", "users", "audit", "field"].includes(n[0]);
     if (user.role === "district_authority") return !["state_dashboard", "citizen_dash", "users", "audit", "ml", "intelligence"].includes(n[0]);
-    if (user.role === "field_officer") return ["field", "rr", "parcels", "gis", "documents"].includes(n[0]);
+    if (user.role === "field_officer") return ["field", "rr", "parcels", "gis", "documents", "workflow", "sla"].includes(n[0]);
     return n[0] !== "citizen_dash";
   });
 

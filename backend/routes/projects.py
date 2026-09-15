@@ -6,18 +6,18 @@ WORKFLOW_STAGES=["Proposal","SIA / Survey","Notification","Legal Dispute / Resol
 WORKFLOW_LABELS={"Proposal":"Proposal","SIA / Survey":"SIA / Survey","Notification":"Notification","Legal Dispute / Resolution":"Objections","Approval":"Approval","Award":"Award","Compensation":"Compensation","Possession":"Possession","Rehabilitation":"Rehabilitation","Closure / Completion":"Completed"}
 CURRENT_STAGE_ALIASES={"Survey":"SIA / Survey","Rehabilitation & Resettlement":"Rehabilitation"}
 TRANSITION_ALERTS={"SIA / Survey":"Acquisition Survey Started","Notification":"Land Acquisition Notification Stage Started","Legal Dispute / Resolution":"Objection Period Started","Approval":"Project Awaiting Approval","Award":"Land Acquisition Award Issued","Compensation":"Compensation Process Started","Possession":"Land Possession Stage Started","Rehabilitation":"Rehabilitation / R&R Stage Started","Closure / Completion":"Land Acquisition Completed"}
-def guard(a,roles=("authority","admin","acquisition_officer","district_authority")):
+def guard(a,roles=("authority","admin","acquisition_officer","district_authority","state_authority","national_authority")):
  u=current_user(a)
  if not u or u["role"] not in roles: raise HTTPException(403,"Insufficient permissions")
  return u
 
 def _notification_target(c, actor, district):
- role="district_authority" if actor["role"] in ("state_authority","authority","admin") else "state_authority"
+ role="district_authority" if actor["role"] in ("state_authority","authority","admin","national_authority") else "state_authority"
  users=c.execute("SELECT email FROM users WHERE role=? AND active=1 ORDER BY id",(role,)).fetchall()
  return next((r["email"] for r in users if district and district.lower() in r["email"].lower()), users[0]["email"] if users else None)
 
 def _transition(project_id, next_stage, authorization):
- u=guard(authorization, roles=("district_authority","authority","admin","acquisition_officer"))
+ u=guard(authorization, roles=("district_authority","authority","admin","acquisition_officer","state_authority","national_authority"))
  if next_stage not in WORKFLOW_STAGES: raise HTTPException(422,"Invalid acquisition stage")
  c=conn(); project=c.execute("SELECT * FROM projects WHERE project_id=?",(project_id,)).fetchone()
  if not project: c.close(); raise HTTPException(404,"Project not found")
@@ -105,7 +105,7 @@ def get_project(project_id:str,authorization:str=Header(None)):
 
 @router.post("/{project_id}/parcels/batch-assign")
 def batch_assign_parcels(project_id: str, payload: dict, authorization: str = Header(None)):
-  u = guard(authorization, roles=("district_authority", "authority", "admin", "state_authority", "acquisition_officer"))
+  u = guard(authorization, roles=("district_authority", "authority", "admin", "state_authority", "acquisition_officer", "national_authority"))
   parcel_ids = payload.get("parcel_ids", [])
   officer_email = payload.get("officer_email")
   if not parcel_ids or not isinstance(parcel_ids, list):
@@ -174,7 +174,7 @@ def batch_assign_parcels(project_id: str, payload: dict, authorization: str = He
 
 @router.post("/{project_id}/parcels/{parcel_id}")
 def link_parcel(project_id:str, parcel_id:int, authorization:str=Header(None)):
- u=guard(authorization, roles=("district_authority","authority","admin","state_authority","acquisition_officer"))
+ u=guard(authorization, roles=("district_authority","authority","admin","state_authority","acquisition_officer","national_authority"))
  c=conn(); project=c.execute("SELECT project_id, district FROM projects WHERE project_id=?",(str(project_id),)).fetchone(); parcel=c.execute("SELECT id,project_id,district FROM parcels WHERE id=?",(parcel_id,)).fetchone()
  if not project: c.close(); raise HTTPException(404,"Project not found")
  if not parcel: c.close(); raise HTTPException(404,"Parcel not found")
@@ -188,7 +188,7 @@ def link_parcel(project_id:str, parcel_id:int, authorization:str=Header(None)):
 
 @router.post("/{project_id}/parcels/{parcel_id}/unassign")
 def unassign_parcel(project_id: str, parcel_id: int, authorization: str = Header(None)):
- u = guard(authorization, roles=("district_authority", "authority", "admin", "state_authority", "acquisition_officer"))
+ u = guard(authorization, roles=("district_authority", "authority", "admin", "state_authority", "acquisition_officer", "national_authority"))
  c = conn()
  parcel = c.execute("SELECT id, project_id, district FROM parcels WHERE id=?", (parcel_id,)).fetchone()
  if not parcel: c.close(); raise HTTPException(404, "Parcel not found")
@@ -206,7 +206,7 @@ import uuid
 
 @router.post("/")
 def create_project(p:dict,authorization:str=Header(None)):
- u=guard(authorization, roles=("authority","admin","state_authority","acquisition_officer","district_authority"))
+ u=guard(authorization, roles=("authority","admin","state_authority","acquisition_officer","district_authority","national_authority"))
  check_resource_district(u, p.get("district"), "Project")
  req=["project_id","project_name","project_type","district","taluk"]; miss=[x for x in req if not p.get(x)]
  if miss: raise HTTPException(400,{"missing_fields":miss})

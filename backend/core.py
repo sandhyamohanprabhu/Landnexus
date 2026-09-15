@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]; DATA=ROOT/'data'; DB=DATA/'survi.db'; 
 AUTH_EMAIL='Tngov@cbe.ac.in'; AUTH_PASSWORD='Tngov@CBE#2026'
 
 def conn():
- c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
+ c=sqlite3.connect(DB, timeout=30.0); c.row_factory=sqlite3.Row; return c
 
 def hash_password(p):
  salt=secrets.token_bytes(16); dk=hashlib.pbkdf2_hmac('sha256',p.encode(),salt,120000); return base64.b64encode(salt+dk).decode()

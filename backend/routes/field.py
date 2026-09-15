@@ -12,7 +12,7 @@ def _officer_emails(u: dict):
 @router.get("/officers")
 def officers(district: str = None, authorization: str = Header(None)):
     u = current_user(authorization)
-    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer", "state_authority"):
+    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer", "state_authority", "national_authority"):
         raise HTTPException(403, "Officer directory access required")
     c = conn()
     target_district = u.get("district_scope") or district
@@ -36,7 +36,7 @@ def officers(district: str = None, authorization: str = Header(None)):
 @router.post("/assign")
 def assign(p: dict, authorization: str = Header(None)):
     u = current_user(authorization)
-    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer"):
+    if not u or u["role"] not in ("district_authority", "authority", "admin", "acquisition_officer", "state_authority", "national_authority"):
         raise HTTPException(403, "Insufficient permissions")
     c = conn()
     parcel_row = c.execute(
